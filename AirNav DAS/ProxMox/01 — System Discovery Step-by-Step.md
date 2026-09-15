@@ -14,7 +14,7 @@ created: 2026-09-14
 # 01 — System Discovery: The Complete Build
 
 **Stack:** Proxmox VE 9.2 · AlmaLinux 9 · Nginx · Flask · MariaDB
-**Status:** Working end-to-end, request-trace pending
+**Status:** Working end-to-end, request trace confirmed — ready to write up
 **Assignment owner:** Hans · **Built by:** Aaron
 
 > [!abstract] What this document is
@@ -851,7 +851,7 @@ ssh -J root@192.168.100.2 root@10.10.10.10 "tail -f /var/log/nginx/access.log"
 ssh -J root@192.168.100.2 root@10.10.10.11 "journalctl -u labapp -f"
 
 # Tab 3 (leave running):
-ssh -J root@192.168.100.2 root@10.10.10.12 "tail -f /var/log/mariadb/mariadb.log"
+ssh -J root@192.168.100.2 root@10.10.10.12 "tail -f /var/lib/mysql/db.log"
 
 # Tab 4 — fire this once the other three are sitting there waiting:
 curl -v http://192.168.100.20/
@@ -860,11 +860,53 @@ curl -v http://192.168.100.20/
 Watching the same request appear in Tabs 1 → 2 → 3, in order, within the
 same second, **is** the "how requests flow between components" deliverable.
 
-> [!tip] If the DB's log stays silent
-> MariaDB's general query log can be configured to write to a **table**
-> instead of a file. Check first: `SHOW VARIABLES LIKE 'log_output';` — if
-> it says `TABLE`, query it directly instead of tailing a file:
-> `SELECT * FROM mysql.general_log ORDER BY event_time DESC LIMIT 5;`
+> [!bug]- Two wrong turns before the DB log actually showed anything
+> **First:** `/var/log/mariadb/mariadb.log` is MariaDB's **error log**, not
+> its **query log** — two entirely different files. Tailing it will only
+> ever show startup/shutdown/warning messages, never queries, no matter
+> how correctly `general_log` is configured.
+> **Second, after finding the right variable:** `general_log = 'ON'` is
+> itself a **runtime-only** setting (see Bug 10's ephemeral-vs-persistent
+> theme) — it silently resets to off every time MariaDB restarts, which
+> had happened during the VT-x/reboot troubleshooting.
+> **The actual fix:** find the real file first —
+> `SHOW VARIABLES LIKE 'general_log_file';` (→ `db.log`, living in the
+> data directory `/var/lib/mysql/`, not `/var/log/`) — then confirm
+> logging is genuinely on: `SHOW VARIABLES LIKE 'log_output';` should say
+> `FILE`, and `SET GLOBAL general_log = 'ON';` needs re-running after any
+> MariaDB restart.
+
+> [!success] Confirmed working — real captured evidence
+> ```
+> 260915  2:06:45     10 Connect  labuser@10.10.10.11 on labdb using TCP/IP
+>                      10 Query    SET NAMES utf8mb4
+>                      10 Query    SET AUTOCOMMIT = 0
+>                      10 Query    SELECT message FROM greetings LIMIT 1
+>                      10 Quit
+> ```
+> This line alone proves the entire access-control chain designed back in
+> §6.1 is genuinely working, not just "the app returns the right HTML":
+> the connecting **user** is `labuser` (not root — least privilege held),
+> from **`10.10.10.11`** (the App VM's real address — the source
+> restriction on the account is doing its job), over **TCP/IP** (a real
+> network connection, not a local socket) — landing within the same
+> second as the `curl` that triggered it. Combined with the matching
+> Nginx access-log line and App VM journal entry from the same request,
+> this is the complete, evidence-backed answer to "how do requests flow
+> between components."
+
+> [!info] A smaller side-finding: inconsistent VM clocks
+> The DB and App VMs' logged times both sit ~4 hours behind true UTC,
+> while the Proxy VM's clock matches UTC correctly (just displayed in a
+> `+0800` local zone). Each VM's timezone was set independently during
+> its own AlmaLinux install screen, and evidently not set consistently.
+> Harmless for this exercise (it didn't stop the same request from being
+> correlated across logs — the *seconds* value matched exactly even
+> where the *hour* didn't), but worth fixing with `timedatectl` before
+> this matters for anything real: mismatched clocks across a fleet make
+> correlating logs during an actual incident much harder than it needs
+> to be — exactly the kind of thing worth catching in a review, not
+> after the fact during a real investigation.
 
 ---
 
