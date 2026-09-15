@@ -13,12 +13,16 @@ created: 2026-09-14
 
 # 01 — System Discovery: The Complete Build
 
+**Stack:** Proxmox VE 9.2 · AlmaLinux 9 · Nginx · Flask · MariaDB
+**Status:** Working end-to-end, request-trace pending
+**Assignment owner:** Hans · **Built by:** Aaron
+
 > [!abstract] What this document is
-> The full record of the **System Discovery** assignment from Hans — what
-> was built, every bug hit along the way, why each one happened, and the
-> underlying concepts each one taught. Part runbook, part write-up. See
-> [[00 — What is Proxmox]] first if "hypervisor," "bridge," or "container"
-> are unfamiliar terms.
+> The full record of the **System Discovery** assignment — what was
+> built, *why each technology was chosen over its alternatives*, every bug
+> hit along the way, and the underlying concept each one taught. This is
+> both the runbook and the write-up. See [[00 — What is Proxmox]] first if
+> "hypervisor," "bridge," or "container" are unfamiliar terms.
 
 > [!quote] The actual assignment (Hans's email)
 > "Understand what a system looks like from a simple perspective, how
@@ -26,6 +30,18 @@ created: 2026-09-14
 > ... most of the systems we support are made up of multiple services
 > working together." Freedom to choose platform/OS/app versions — the
 > objective is the *architecture and reasoning*, not a specific stack.
+
+## Contents
+
+- [[#1 · The end result, at a glance]]
+- [[#2 · Decision log — why each technology was chosen]]
+- [[#3 · Part One — Standing up Proxmox itself]]
+- [[#4 · Part Two — Building the internal network]]
+- [[#5 · Part Three — The hardware wall: AlmaLinux 10 vs 9]]
+- [[#6 · Part Four — Building the three VMs]]
+- [[#7 · Part Five — Proving it: tracing one request across every hop]]
+- [[#8 · Write-up for Hans]]
+- [[#9 · Concept glossary]]
 
 ---
 
@@ -64,13 +80,271 @@ multi-service system the assignment is about.
 
 ---
 
-## 2 · Part One — Standing up Proxmox itself
+## 2 · Decision log — why each technology was chosen
+
+> [!tip] How to read this section
+> Every row links to a fuller writeup below it. Skim the table for the
+> quick answer; open a row's callout (click to expand) if you want the
+> full reasoning, alternatives considered, and trade-offs accepted.
+
+| # | Decision | Chosen | Over | Full reasoning |
+|---|---|---|---|---|
+| D1 | Hypervisor platform | **Proxmox VE** | ESXi, Hyper-V, plain libvirt, VirtualBox | ↓ |
+| D2 | Guest OS family | **AlmaLinux** | Ubuntu, Debian, Fedora, CentOS Stream | ↓ |
+| D3 | Guest OS version | **AlmaLinux 9** | AlmaLinux 10 | ↓ |
+| D4 | Virtualization type | **Full VMs** | LXC containers | ↓ |
+| D5 | Architecture shape | **3-tier, segmented** | Single flat VM | ↓ |
+| D6 | Reverse proxy | **Nginx** | Apache httpd, Caddy, HAProxy | ↓ |
+| D7 | App framework | **Flask** | Django, FastAPI, Node/Express | ↓ |
+| D8 | Database | **MariaDB** | MySQL, PostgreSQL, SQLite | ↓ |
+| D9 | Reaching internal VMs | **SSH `-J` (jump host)** | Static routes, VPN, port-forwarding | ↓ |
+
+### D1 — Proxmox VE as the hypervisor
+
+> [!example]- Full reasoning: why Proxmox over ESXi / Hyper-V / plain libvirt / VirtualBox
+> **Context:** needed a bare-metal (type-1) hypervisor on a spare PC,
+> assigned by name in the training email.
+>
+> **Alternatives considered:**
+> - **VMware ESXi** — the traditional enterprise default, but Broadcom's
+>   2024 licensing overhaul discontinued the free tier for new
+>   installs[^1] — a real, practical disqualifier for a personal lab.
+> - **Microsoft Hyper-V** — Windows-only; the assignment's first step was
+>   *removing* Windows from this machine entirely.
+> - **Plain libvirt/virt-manager** — the same KVM engine Proxmox uses
+>   underneath, but with no built-in web UI, clustering, storage
+>   abstraction, or backup tooling — all of that would need assembling
+>   by hand.
+> - **VirtualBox** — a type-2 hypervisor (runs as an application on top
+>   of a host OS, not on bare metal) — weaker isolation and performance
+>   than a type-1 design, and no relevant management tooling for this.
+>
+> **Decision:** Proxmox VE — free, fully open-source (AGPLv3, no
+> feature-gating behind a paywall), a real web UI plus API, and both
+> KVM (full VMs) and LXC (containers) in one platform.
+>
+> **Trade-off accepted:** a steeper CLI/config-file learning curve than a
+> GUI-only hypervisor — but that same transparency (`/etc/network/
+> interfaces`, `qm config`, `pct mount`) is precisely what made every bug
+> in this document diagnosable at all.
+
+### D2 — AlmaLinux as the OS family
+
+> [!example]- Full reasoning: why AlmaLinux over Ubuntu / Debian / Fedora / CentOS Stream
+> **Context:** total freedom of choice per Hans's email — this decision
+> was made for a specific, personal reason rather than a technical one.
+>
+> **Alternatives considered:**
+> - **Ubuntu Server** — huge community, very common in cloud/hobbyist
+>   contexts, `apt`/`ufw`/AppArmor toolchain.
+> - **Debian** — extremely stable, and literally what Proxmox itself is
+>   built on — but not what real client infrastructure runs.
+> - **Fedora Server** — cutting-edge, but a ~13-month support window is
+>   too short for a box meant to keep being learned on.
+> - **CentOS Stream** — RHEL's upstream, rolling-release; less
+>   predictable than a fixed-point rebuild.
+>
+> **Decision:** AlmaLinux — a 1:1 binary-compatible rebuild of RHEL.
+>
+> **Why this one specifically:** it matches the **actual environment
+> already being worked in** — RHEL-family client infrastructure at work,
+> and the company-issued laptop this whole project was managed from is
+> itself AlmaLinux. Every tool this exercise ends up using —
+> `dnf`, `firewalld`, `SELinux`, `systemd` — is the *exact same tooling*
+> used on the day job. Choosing Ubuntu would have meant learning `apt`/
+> `ufw`/AppArmor instead: transferable in principle, but not directly
+> useful right now.
+>
+> **Trade-off accepted:** smaller hobbyist community/fewer blog posts
+> than Ubuntu for troubleshooting — and, concretely, this choice is *why*
+> the CPU-compatibility wall in [[#5 · Part Three — The hardware wall: AlmaLinux 10 vs 9|§5]]
+> was hit at all: RHEL 10 specifically chose to raise its CPU baseline.
+> An Ubuntu 24.04 LTS install would not have hit that particular wall.
+> That trade-off was accepted deliberately, and diagnosing it became one
+> of the most valuable parts of the whole exercise.
+
+### D3 — AlmaLinux 9, not 10
+
+> [!example]- Full reasoning: why 9 over 10 — see [[#5 · Part Three — The hardware wall: AlmaLinux 10 vs 9|§5]] for the full investigation
+> **Context:** AlmaLinux 10 was the original choice — it's the current
+> release, and D2's reasoning (matching the work environment) applied
+> equally to it.
+>
+> **What happened:** AlmaLinux 10 turned out to require the `x86-64-v3`
+> CPU instruction set, which this specific system unit's CPU (a 2011
+> Intel i5-2400) does not support. This wasn't a config mistake — it's a
+> genuine hardware ceiling, discovered only after two separate VM boot
+> failures and one very informative container crash. The full
+> investigation, including the exact error messages at each step, lives
+> in [[#5 · Part Three — The hardware wall: AlmaLinux 10 vs 9|§5]] rather
+> than being repeated here.
+>
+> **Decision:** AlmaLinux 9, which targets `x86-64-v2` — a correct match
+> for this hardware.
+>
+> **Trade-off accepted:** one version behind the current release, and a
+> few years earlier end-of-life date than AlmaLinux 10 — acceptable for a
+> training exercise; would be worth revisiting if this box's CPU is ever
+> upgraded, or on genuinely newer hardware.
+
+### D4 — Full VMs over LXC containers (for the final build)
+
+> [!example]- Full reasoning: why VMs won out after LXC was tried first
+> **Context:** LXC was actually tried *first* — it shares the host
+> kernel directly (no bootloader step at all) and uses far less RAM,
+> which looked like the obvious answer on a 3.7 GB host.
+>
+> **What happened:** LXC didn't just fail to boot — it produced the
+> single most informative error of the entire project
+> (`Fatal glibc error: CPU does not support x86-64-v3`), because a
+> container's process runs directly against the host CPU with none of a
+> VM's firmware/bootloader layer in between to obscure *why* it failed.
+> See [[#5 · Part Three — The hardware wall: AlmaLinux 10 vs 9|§5]] for the
+> full story.
+>
+> **Decision:** once the real cause (AlmaLinux 10 needing `x86-64-v3`)
+> was fixed by switching to AlmaLinux 9, the reason for wanting LXC's
+> lighter footprint mostly evaporated — AlmaLinux 9 runs comfortably in
+> ~1 GB per VM once installed. Full VMs were kept for the final build.
+>
+> **Why keep VMs instead of switching back to LXC once unblocked:**
+> stronger isolation (separate kernels, not a shared one) is a better
+> teaching example of what a hypervisor actually provides, and the
+> boot-safe hardware settings (SeaBIOS + SATA) were already proven working
+> by that point — no reason to re-open a settled question.
+>
+> **Trade-off accepted:** meaningfully higher RAM usage than LXC would
+> have needed — manageable here, but LXC remains the better choice if
+> resource pressure becomes a real problem later. Worth remembering this
+> is a live trade-off, not a permanent verdict.
+
+### D5 — A segmented 3-tier shape, not one flat VM
+
+> [!example]- Full reasoning: why proxy/app/db instead of everything on one VM
+> **Context:** the assignment could technically be "satisfied" by
+> installing Nginx, Flask, and MariaDB all on a single VM — nothing
+> forces a multi-machine design.
+>
+> **Decision:** three separate VMs, deliberately split across a public-
+> facing segment and an isolated internal one. See
+> [[#1 · The end result, at a glance|§1]] for the diagram and role table.
+>
+> **Why not one flat VM:** a single VM would technically run the same
+> software, but it would demonstrate nothing about **how components
+> communicate across a network** — which is the literal subject of the
+> assignment ("how different components work together, and how requests
+> flow between them"). One VM has no request to trace at all; it's just
+> local function calls inside one process space.
+>
+> **Trade-off accepted:** three times the OS-level setup and maintenance
+> (three sets of `dnf update`, three firewalls, three SSH sessions to
+> manage) versus one — a deliberate cost, since that overhead *is* what
+> real multi-service systems require, and papering over it would have
+> undermined the exercise's actual point.
+
+### D6 — Nginx as the reverse proxy
+
+> [!example]- Full reasoning: why Nginx over Apache httpd / Caddy / HAProxy
+> **Alternatives considered:**
+> - **Apache httpd** — AlmaLinux's other default web server option;
+>   traditionally a process/thread-per-connection model versus Nginx's
+>   event-driven one, and configured through a very different, more
+>   verbose module system (`.htaccess`-style per-directory config).
+> - **Caddy** — modern, automatic HTTPS out of the box, but a smaller
+>   footprint in enterprise RHEL environments — less representative of
+>   what's actually deployed in the field.
+> - **HAProxy** — a extremely capable, purpose-built L4/L7 load balancer,
+>   but more specialized than needed for a single backend with no load
+>   balancing requirement.
+>
+> **Decision:** Nginx. Its event-driven architecture is a natural fit
+> for "sit in front and forward traffic," it's the single most common
+> real-world choice for exactly this reverse-proxy pattern, and its
+> config block (`proxy_pass`, `proxy_set_header`) demonstrates the
+> concept with nothing hidden.
+>
+> **Trade-off accepted:** none significant for this use case — Apache
+> would have worked too, this came down to which config style better
+> demonstrates the underlying concept.
+
+### D7 — Flask as the app framework
+
+> [!example]- Full reasoning: why Flask over Django / FastAPI / Node.js / PHP
+> **Alternatives considered:**
+> - **Django** — "batteries included" (ORM, admin panel, auth system) —
+>   genuinely excellent for a real product, but its scaffolding would
+>   have buried the one thing this exercise needed to show clearly: a
+>   single, visible network call from app to database.
+> - **FastAPI** — a strong, modern choice, async-first with automatic
+>   API docs — arguably just as good a fit as Flask technically.
+> - **Node.js/Express** — would have introduced a second programming
+>   language into the exercise for no structural benefit.
+> - **Plain PHP** — still common on RHEL/Apache stacks, but less
+>   relevant to where this skillset is actually headed next.
+>
+> **Decision:** Flask — the entire app is ~15 lines. Every line is either
+> "handle a request" or "talk to the database," with no ORM or framework
+> convention obscuring the raw `pymysql.connect(...)` call that *is* the
+> App→DB hop this whole exercise exists to demonstrate.
+>
+> **Trade-off accepted:** Flask's built-in development server is
+> explicitly not production-grade (it says so in its own startup banner)
+> — a real deployment would run it behind a proper WSGI server like
+> Gunicorn. Worth knowing as the natural next step beyond this exercise.
+
+### D8 — MariaDB as the database
+
+> [!example]- Full reasoning: why MariaDB over MySQL / PostgreSQL / SQLite
+> **Alternatives considered:**
+> - **MySQL** — the original; Oracle-owned. RHEL/CentOS/AlmaLinux
+>   dropped it as their *default* database years ago specifically in
+>   favor of MariaDB, a community-governed fork, to stay independent of
+>   Oracle's licensing direction[^2].
+> - **PostgreSQL** — arguably more standards-compliant SQL and equally
+>   capable technically — this would have worked just as well.
+> - **SQLite** — file-based, with **no network protocol at all**. Using
+>   it would have silently defeated the entire point of this exercise:
+>   there would be no genuine network hop between the App and DB tiers to
+>   observe or trace.
+>
+> **Decision:** MariaDB — it's the literal `mariadb-server` package that
+> ships as AlmaLinux's own default relational database, a zero-friction
+> fit with the OS choice (D2), and it speaks the same wire protocol as
+> MySQL, so the ordinary `pymysql` client library works against it
+> unmodified.
+>
+> **Trade-off accepted:** essentially none for this use case — this was
+> mostly "match what the OS already defaults to" rather than a contest
+> between competing strengths.
+
+### D9 — SSH ProxyJump to reach internal VMs
+
+> [!example]- Full reasoning: why `-J` over static routes / a VPN / port-forwarding
+> **Alternatives considered:**
+> - **A static route on the laptop** for `10.10.10.0/24` via Proxmox —
+>   would work, but permanently modifies the laptop's own routing table
+>   for something that's really the lab's concern, not the laptop's.
+> - **A VPN into the internal network** — solves the same problem, but
+>   is significant over-engineering for a single-operator lab.
+> - **Plain SSH local port-forwarding** (`-L`) — works per-service, but
+>   doesn't generalize to "just give me a shell on that box."
+>
+> **Decision:** `ssh -J root@192.168.100.2 root@10.10.10.X` — a **jump
+> host** (bastion) pattern: hop through Proxmox, which already has a
+> route into the internal network, straight to the target. Zero
+> persistent configuration anywhere, and it's the exact same pattern used
+> in real production environments to reach segmented internal networks —
+> directly relevant to actual MSSP/infra work, not just a lab convenience.
+
+---
+
+## 3 · Part One — Standing up Proxmox itself
 
 Before any VM existed, the physical system unit had to become a working
-Proxmox host reachable from the laptop. This alone surfaced four separate
-bugs.
+Proxmox host reachable from the laptop. This alone surfaced four
+separate bugs.
 
-> [!bug] Bug 1 — USB installer wouldn't boot
+> [!bug]- Bug 1 — USB installer wouldn't boot
 > **Symptom:** `Found ISO9660 FS but no or wrong PROXMOX cd-id, skipping`
 > **Cause:** the write to the USB stick was bad — the ISO's own SHA256
 > checksum verified clean against Proxmox's official published hash, so
@@ -78,7 +352,7 @@ bugs.
 > **Fix:** re-flashed with `dd` directly (`dd if=proxmox-ve_9.2-1.iso
 > of=/dev/sdX bs=4M status=progress conv=fsync`), which succeeded.
 
-> [!bug] Bug 2 — Direct laptop↔system-unit cable showed `NO-CARRIER`
+> [!bug]- Bug 2 — Direct laptop↔system-unit cable showed `NO-CARRIER`
 > **Symptom:** plugging a cable straight from the laptop's Ethernet port
 > to the system unit gave a permanent "no link" state — no lights, no
 > connection, even though the same port worked fine into a router.
@@ -89,7 +363,7 @@ bugs.
 > **Fix:** routed the cable through a plain unmanaged switch instead of
 > point-to-point. Link came up immediately.
 
-> [!bug] Bug 3 — Proxmox had no internet, and its clock was 2 months wrong
+> [!bug]- Bug 3 — Proxmox had no internet, and its clock was 2 months wrong
 > **Symptom:** `apt-get update` failed, and `timedatectl` showed the date
 > stuck on the day of the ISO release, `System clock synchronized: no`.
 > **Cause, chained:** Proxmox's install-time static IP pointed its default
@@ -105,11 +379,11 @@ bugs.
 > > [!info] Concept: a host can (and often should) have two addresses
 > > One NIC, two IP addresses, two purposes: `192.168.100.2` for the
 > > private lab network, `192.168.107.50` for real internet — both live on
-> > `vmbr0` simultaneously. This is completely normal; a machine's identity
-> > isn't "one IP," it's "every address it's been given," each serving
-> > whichever network it needs to reach.
+> > `vmbr0` simultaneously. A machine's identity isn't "one IP," it's
+> > "every address it's been given," each serving whichever network it
+> > needs to reach.
 
-> [!bug] Bug 4 — `apt-get update` still failing after internet was fixed
+> [!bug]- Bug 4 — `apt-get update` still failing after internet was fixed
 > **Symptom:** `401 Unauthorized` on `enterprise.proxmox.com`.
 > **Cause:** Proxmox defaults to its paid **Enterprise repository**, which
 > requires a subscription key that doesn't exist here.
@@ -124,7 +398,7 @@ a clean `apt-get update`.
 
 ---
 
-## 3 · Part Two — Building the internal network
+## 4 · Part Two — Building the internal network
 
 > [!info] Concept: network segmentation
 > The App and DB VMs never need to be reachable from your laptop or the
@@ -132,9 +406,8 @@ a clean `apt-get update`.
 > isolated bridge (`vmbr1`, no physical NIC attached) means there's
 > **no path in** from outside except through the one component
 > deliberately exposed. This is the same principle behind real DMZs and
-> internal segments in production networks — it's not extra complexity for
-> its own sake, it's the actual security boundary the assignment is
-> implicitly teaching.
+> internal segments in production networks — it's the actual security
+> boundary the assignment is implicitly teaching.
 
 `vmbr1` was created with the host itself holding `10.10.10.1/24` on it —
 but a bridge with just an address only lets *Proxmox* reach that network.
@@ -155,7 +428,7 @@ nothing on `10.10.10.0/24` has a route out on its own.
 > address on the way out — so they get outbound access without ever being
 > directly reachable from outside.
 
-> [!bug] Bug 5 — `192.168.100.2` briefly vanished from `vmbr0`
+> [!bug]- Bug 5 — `192.168.100.2` briefly vanished from `vmbr0`
 > **Symptom:** total loss of connectivity to Proxmox from the laptop,
 > mid-way through building the App VM.
 > **Cause:** the saved config file was actually correct — the *running*
@@ -168,9 +441,39 @@ nothing on `10.10.10.0/24` has a route out on its own.
 > **Lesson:** always check the shell prompt (`root@pve` = the host,
 > anything else = a guest) before running network commands.
 
+> [!bug]- Bug 10 — Laptop lost its lab IP overnight
+> **Symptom:** next day, `https://192.168.100.2:8006` was completely
+> unreachable — but Proxmox itself was fine (its internet-facing address,
+> `192.168.107.50`, still responded to a ping).
+> **Cause:** the laptop's `192.168.100.10/24` address had been added with
+> a plain `ip addr add` command — a **live, in-memory-only** change. It
+> was never saved anywhere, so it silently disappeared the moment the
+> interface reset (a reboot, a cable unplug, anything).
+> **Fix (immediate):** re-ran the same `ip addr add` command.
+> **Fix (permanent):** created a real, saved NetworkManager profile
+> instead:
+> ```bash
+> sudo nmcli connection add type ethernet ifname enp0s31f6 con-name proxmox-lab ip4 192.168.100.10/24
+> sudo nmcli connection up proxmox-lab
+> ```
+>
+> > [!info] Concept: ephemeral vs. persistent configuration — a theme across this whole project
+> > This is the **third time** this exact category of bug appeared:
+> > 1. Proxmox's own network fix (Bug 3) had to be written into
+> >    `/etc/network/interfaces` and applied with `ifreload -a` — not just
+> >    run live — to survive a reboot.
+> > 2. `vmbr1`'s NAT rules were written as `post-up`/`pre-down` hooks in
+> >    that same file for the same reason.
+> > 3. This laptop bug is the same lesson from the other side: a command
+> >    run directly against the kernel (`ip addr add`, `iptables -A`,
+> >    anything not saved to a config file or profile) only lasts until
+> >    the next reset. **"It's working" and "it will still be working
+> >    tomorrow" are two different claims** — always ask which one you've
+> >    actually achieved.
+
 ---
 
-## 4 · Part Three — The hardware wall: AlmaLinux 10 vs 9
+## 5 · Part Three — The hardware wall: AlmaLinux 10 vs 9
 
 This is the single biggest detour of the whole project, and the most
 instructive.
@@ -199,7 +502,7 @@ instructive.
 This fact wasn't obvious at first — it took three separate failures,
 each more informative than the last, to surface it:
 
-> [!bug] Bug 6 — AlmaLinux 10 VM installed, but never booted (attempt 1: legacy BIOS)
+> [!bug]- Bug 6 — AlmaLinux 10 VM installed, but never booted (attempt 1: legacy BIOS)
 > **Symptom:** installer completed successfully, but every reboot showed a
 > **blinking cursor** for a few seconds, then fell back to the ISO's own
 > installer menu again.
@@ -212,17 +515,17 @@ each more informative than the last, to surface it:
 > a `virtio-scsi-single` disk under legacy BIOS + GPT — a known rough edge
 > for RHEL-family installers in KVM.
 
-> [!bug] Bug 7 — Same VM, attempt 2: switched to UEFI/OVMF
+> [!bug]- Bug 7 — Same VM, attempt 2: switched to UEFI/OVMF
 > **Symptom:** `BdsDxe failed to load Boot003 "UEFI QEMU HARDISK"` — a
 > *different* firmware, a *different* boot failure.
 > **Significance:** two entirely different boot paths (legacy BIOS and
 > UEFI) both failing pointed at something deeper than a bootloader quirk —
 > the OS itself, not the firmware, was the likely common factor.
 
-> [!bug] Bug 8 — Tried LXC containers instead — this is what cracked it open
+> [!bug]- Bug 8 — Tried LXC containers instead — this is what cracked it open
 > Reasoning at the time: containers have no bootloader/firmware step at
 > all, so this should sidestep both prior failures *and* be lighter on
-> this host's limited 3.7 GB RAM.
+> this host's limited 3.7 GB RAM (see [[#D4 — Full VMs over LXC containers (for the final build)|D4]]).
 > **Result:** the container's init process (`/sbin/init` → systemd)
 > started, then died within milliseconds. Digging in with
 > `pct mount 100` (mounts a stopped container's disk for direct
@@ -239,8 +542,8 @@ each more informative than the last, to surface it:
 > [!success] The fix
 > Switched the entire exercise to **AlmaLinux 9**, which correctly targets
 > `x86-64-v2`. This also meant going back to full VMs (not containers) for
-> the final build, since the containers-vs-VMs question was never really
-> the issue — the OS version was.
+> the final build — see [[#D4 — Full VMs over LXC containers (for the final build)|D4]]
+> for why that stuck even after the real fix was in place.
 
 > [!tip] Why document a dead end this thoroughly
 > Diagnosing *why* something doesn't work — ruling out wrong theories
@@ -251,7 +554,7 @@ each more informative than the last, to surface it:
 
 ---
 
-## 5 · Part Four — Building the three VMs (AlmaLinux 9)
+## 6 · Part Four — Building the three VMs
 
 > [!tip] Boot-safe hardware settings
 > Given two prior boot failures, the final build deliberately used the
@@ -280,7 +583,16 @@ memory-hungry part of the whole process on a 3.7 GB host.
 | **App VM** | `ens18` → `vmbr1` | `10.10.10.11/24` | `10.10.10.1` |
 | **DB VM** | `ens18` → `vmbr1` | `10.10.10.12/24` | `10.10.10.1` |
 
-### 5.1 — DB VM (build first — nothing depends on it)
+> [!info] Concept: DHCP vs. static addressing
+> **DHCP** (Dynamic Host Configuration Protocol) means a device asks the
+> network "give me an address" and a server hands one out on lease —
+> convenient, but the address can change. **Static** means the address
+> is fixed by hand and never changes on its own. This build deliberately
+> mixes both: DHCP wherever *internet access* is the goal (the address
+> value itself doesn't matter), static wherever *other machines need a
+> predictable, stable address to connect to* (every internal service).
+
+### 6.1 — DB VM (build first — nothing depends on it)
 
 **Reach it:** `ssh -J root@192.168.100.2 root@10.10.10.12`
 
@@ -337,7 +649,7 @@ firewall-cmd --reload
 -e "SELECT * FROM greetings;"` — using a real IP (not `localhost`) forces
 an actual TCP connection, proving the network path genuinely works.
 
-### 5.2 — App VM (build second — needs the DB to test against)
+### 6.2 — App VM (build second — needs the DB to test against)
 
 **Reach it:** `ssh -J root@192.168.100.2 root@10.10.10.11`
 
@@ -398,6 +710,9 @@ WantedBy=multi-user.target
 > starts at boot (`enable`), restarts itself if it crashes
 > (`Restart=always`), and keeps running independent of any open session —
 > the same treatment every other real service (including MariaDB) gets.
+> The three sections mean: **`[Unit]`** — metadata and ordering (start
+> after networking is up); **`[Service]`** — how to actually run it;
+> **`[Install]`** — which boot target hooks it into when `enable` is used.
 
 ```bash
 systemctl daemon-reload
@@ -410,7 +725,7 @@ curl localhost:5000   # local-only test: isolates "does the app work" from "can 
 **Verified working:** returned `<h1>Hello from the App VM</h1><p>DB says:
 Hello from the DB VM!</p>` — real data, fetched live across the network.
 
-### 5.3 — Proxy VM (build last — the public-facing front door)
+### 6.3 — Proxy VM (build last — the public-facing front door)
 
 **Reach it:** `ssh -J root@192.168.100.2 root@10.10.10.10` (internal side)
 or, once configured below, directly at `192.168.100.20` from the laptop.
@@ -435,7 +750,9 @@ nmcli connection up ens18
 > dynamic and on a network your laptop can't directly reach. The second,
 > static address puts it on the same subnet as the laptop
 > (`192.168.100.0/24`) — the exact same reasoning as Proxmox's own
-> dual-homed setup from Part One.
+> dual-homed setup from Part One. **Unlike Bug 10**, this one was added
+> through `nmcli connection modify` on a real saved profile from the
+> start, so it survives reboots.
 
 ```bash
 dnf install -y nginx
@@ -472,7 +789,7 @@ firewall-cmd --permanent --add-service=http
 firewall-cmd --reload
 ```
 
-> [!bug] Bug 9 — `502 Bad Gateway` even though the network path was fine
+> [!bug]- Bug 9 — `502 Bad Gateway` even though the network path was fine
 > **Symptom:** `curl http://192.168.100.20/` returned `502 Bad Gateway`,
 > but `curl http://10.10.10.11:5000` run directly **on the Proxy VM**
 > worked perfectly — proving plain network connectivity wasn't the issue.
@@ -514,7 +831,7 @@ Laptop → Nginx → Flask → MariaDB → back, confirmed.
 
 ---
 
-## 6 · Part Five — Proving it: tracing one request across every hop
+## 7 · Part Five — Proving it: tracing one request across every hop
 
 > [!tip] The mistake to avoid
 > The first attempt at this tailed each log **sequentially** — opening
@@ -551,12 +868,13 @@ same second, **is** the "how requests flow between components" deliverable.
 
 ---
 
-## 7 · Write-up for Hans
+## 8 · Write-up for Hans
 
 Bring:
-1. The architecture diagram (§1) and IP plan (§5)
-2. A screenshot/copy of the simultaneous 3-log trace (§6)
-3. This document's bug log (§2–5) as the reasoning trail — the CPU
+1. The architecture diagram ([[#1 · The end result, at a glance|§1]]) and IP plan ([[#6 · Part Four — Building the three VMs|§6]])
+2. The decision log ([[#2 · Decision log — why each technology was chosen|§2]]) — the *why* behind every choice, not just the *what*
+3. A screenshot/copy of the simultaneous 3-log trace ([[#7 · Part Five — Proving it: tracing one request across every hop|§7]])
+4. This document's bug log (§3–6) as the reasoning trail — the CPU
    incompatibility discovery in particular is a genuinely strong example
    of systematic troubleshooting: two plausible-but-wrong theories ruled
    out before finding the real cause
@@ -568,22 +886,31 @@ having something running.
 
 ---
 
-## 8 · Concept glossary
+## 9 · Concept glossary
 
 | Concept | One-line explanation | Where it showed up |
 |---|---|---|
 | Three-tier architecture | Presentation / logic / data, separated | §1 |
-| Network segmentation | Isolate what doesn't need to be reachable | §3 |
-| NAT / IP masquerading | Many private hosts share one public exit address | §3 |
-| x86-64-v1–v4 | CPU instruction-set baseline tiers; not all "64-bit" CPUs are equal | §4 |
-| KVM vs LXC | Full hardware virtualization vs. host-kernel-sharing containers | §4, [[00 — What is Proxmox]] |
-| BIOS vs UEFI | Two different, incompatible PC firmware/boot standards | §4 |
-| Least privilege | Every account/process gets only the access it strictly needs | §5.1 |
-| Reverse proxy | A front-door process that forwards requests to a backend | §5.3 |
-| SELinux domains | Per-process-type security confinement, independent of Unix permissions and firewalls | §5.3 |
-| systemd services | How to make any script a real, persistent background service | §5.2 |
+| Architecture Decision Record (ADR) | Documenting *why* a technical choice was made, not just what was chosen | §2 |
+| Network segmentation | Isolate what doesn't need to be reachable | §4 |
+| NAT / IP masquerading | Many private hosts share one public exit address | §4 |
+| Ephemeral vs. persistent config | A live command lasts until the next reset; only a saved file/profile survives one | §4 (Bug 10) |
+| x86-64-v1–v4 | CPU instruction-set baseline tiers; not all "64-bit" CPUs are equal | §5 |
+| KVM vs LXC | Full hardware virtualization vs. host-kernel-sharing containers | §5, [[00 — What is Proxmox]] |
+| BIOS vs UEFI | Two different, incompatible PC firmware/boot standards | §5 |
+| DHCP vs static addressing | Leased/dynamic vs. fixed-by-hand IP assignment | §6 |
+| Least privilege | Every account/process gets only the access it strictly needs | §6.1 |
+| systemd services | How to make any script a real, persistent background service | §6.2 |
+| Reverse proxy | A front-door process that forwards requests to a backend | §6.3 |
+| SELinux domains | Per-process-type security confinement, independent of Unix permissions and firewalls | §6.3 |
+| SSH jump host (bastion) | Hopping through one reachable machine to reach an otherwise-isolated one | §2 (D9) |
 
 **External references:**
 - [Proxmox VE Administration Guide](https://pve.proxmox.com/pve-docs/pve-admin-guide.html)
 - [AlmaLinux documentation](https://wiki.almalinux.org/)
 - [Nginx reverse proxy docs](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
+
+---
+
+[^1]: Broadcom's acquisition of VMware in 2023 restructured licensing around subscription bundles and ended the free ESXi hypervisor for new deployments in 2024 — a widely-discussed shift in the virtualization industry that made "just use ESXi" no longer a free option for a personal lab.
+[^2]: MySQL's original creators forked it into MariaDB in 2009 after Oracle's acquisition of Sun Microsystems (which owned MySQL) raised community concerns about its long-term openness — RHEL-family distributions switched their default package from `mysql-server` to `mariadb-server` in RHEL 7/CentOS 7 and never looked back.
