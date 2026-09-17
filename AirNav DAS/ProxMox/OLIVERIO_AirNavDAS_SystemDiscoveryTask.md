@@ -1,49 +1,6 @@
----
-tags:
-  - proxmox
-  - virtualization
-  - system-discovery
-  - moc
-aliases:
-  - System Discovery
-  - System Discovery Plan
-reading-order: 1
-created: 2026-09-14
----
 
-# 01 — System Discovery: The Complete Build
+# System Discovery Task
 
-**Stack:** Proxmox VE 9.2 · AlmaLinux 9 · Nginx · Flask · MariaDB
-**Status:** Working end-to-end, request trace confirmed — ready to write up
-**Assignment owner:** Hans · **Built by:** Aaron
-
-> [!abstract] What this document is
-> The full record of the **System Discovery** assignment — what was
-> built, *why each technology was chosen over its alternatives*, every bug
-> hit along the way, and the underlying concept each one taught. This is
-> both the runbook and the write-up. See [[00 — What is Proxmox]] first if
-> "hypervisor," "bridge," or "container" are unfamiliar terms.
-
-> [!quote] The actual assignment (Hans's email)
-> "Understand what a system looks like from a simple perspective, how
-> different components work together, and how requests flow between them
-> ... most of the systems we support are made up of multiple services
-> working together." Freedom to choose platform/OS/app versions — the
-> objective is the *architecture and reasoning*, not a specific stack.
-
-## Contents
-
-- [[#1 · The end result, at a glance]]
-- [[#2 · Decision log — why each technology was chosen]]
-- [[#3 · Part One — Standing up Proxmox itself]]
-- [[#4 · Part Two — Building the internal network]]
-- [[#5 · Part Three — The hardware wall: AlmaLinux 10 vs 9]]
-- [[#6 · Part Four — Building the three VMs]]
-- [[#7 · Part Five — Proving it: tracing one request across every hop]]
-- [[#8 · Write-up for Hans]]
-- [[#9 · Concept glossary]]
-
----
 
 ## 1 · The end result, at a glance
 
@@ -76,30 +33,14 @@ multi-service system the assignment is about.
 > each layer scale, fail, and be secured independently. The DB never has
 > to be reachable from the internet; only the proxy does. Real systems
 > supported in MSSP/infra work are almost always some variant of this
-> shape, which is exactly why Hans picked it as the learning vehicle.
+> shape, which is exactly why it makes a good learning vehicle.
 
 ---
 
 ## 2 · Decision log — why each technology was chosen
 
-> [!tip] How to read this section
-> Every row links to a fuller writeup below it. Skim the table for the
-> quick answer; open a row's callout (click to expand) if you want the
-> full reasoning, alternatives considered, and trade-offs accepted.
 
-| # | Decision | Chosen | Over | Full reasoning |
-|---|---|---|---|---|
-| D1 | Hypervisor platform | **Proxmox VE** | ESXi, Hyper-V, plain libvirt, VirtualBox | ↓ |
-| D2 | Guest OS family | **AlmaLinux** | Ubuntu, Debian, Fedora, CentOS Stream | ↓ |
-| D3 | Guest OS version | **AlmaLinux 9** | AlmaLinux 10 | ↓ |
-| D4 | Virtualization type | **Full VMs** | LXC containers | ↓ |
-| D5 | Architecture shape | **3-tier, segmented** | Single flat VM | ↓ |
-| D6 | Reverse proxy | **Nginx** | Apache httpd, Caddy, HAProxy | ↓ |
-| D7 | App framework | **Flask** | Django, FastAPI, Node/Express | ↓ |
-| D8 | Database | **MariaDB** | MySQL, PostgreSQL, SQLite | ↓ |
-| D9 | Reaching internal VMs | **SSH `-J` (jump host)** | Static routes, VPN, port-forwarding | ↓ |
-
-### D1 — Proxmox VE as the hypervisor
+### Proxmox VE as the hypervisor
 
 > [!example]- Full reasoning: why Proxmox over ESXi / Hyper-V / plain libvirt / VirtualBox
 > **Context:** needed a bare-metal (type-1) hypervisor on a spare PC,
@@ -108,7 +49,7 @@ multi-service system the assignment is about.
 > **Alternatives considered:**
 > - **VMware ESXi** — the traditional enterprise default, but Broadcom's
 >   2024 licensing overhaul discontinued the free tier for new
->   installs[^1] — a real, practical disqualifier for a personal lab.
+>   installs — a real, practical disqualifier for a personal lab.
 > - **Microsoft Hyper-V** — Windows-only; the assignment's first step was
 >   *removing* Windows from this machine entirely.
 > - **Plain libvirt/virt-manager** — the same KVM engine Proxmox uses
@@ -128,11 +69,11 @@ multi-service system the assignment is about.
 > interfaces`, `qm config`, `pct mount`) is precisely what made every bug
 > in this document diagnosable at all.
 
-### D2 — AlmaLinux as the OS family
+### AlmaLinux as the OS family
 
 > [!example]- Full reasoning: why AlmaLinux over Ubuntu / Debian / Fedora / CentOS Stream
-> **Context:** total freedom of choice per Hans's email — this decision
-> was made for a specific, personal reason rather than a technical one.
+> **Context:** total freedom of choice on OS — this decision was made
+> for a specific, personal reason rather than a technical one.
 >
 > **Alternatives considered:**
 > - **Ubuntu Server** — huge community, very common in cloud/hobbyist
@@ -163,12 +104,12 @@ multi-service system the assignment is about.
 > That trade-off was accepted deliberately, and diagnosing it became one
 > of the most valuable parts of the whole exercise.
 
-### D3 — AlmaLinux 9, not 10
+### AlmaLinux 9, not 10
 
 > [!example]- Full reasoning: why 9 over 10 — see [[#5 · Part Three — The hardware wall: AlmaLinux 10 vs 9|§5]] for the full investigation
 > **Context:** AlmaLinux 10 was the original choice — it's the current
-> release, and D2's reasoning (matching the work environment) applied
-> equally to it.
+> release, and the same reasoning that picked AlmaLinux in the first
+> place (matching the work environment) applied equally to it.
 >
 > **What happened:** AlmaLinux 10 turned out to require the `x86-64-v3`
 > CPU instruction set, which this specific system unit's CPU (a 2011
@@ -187,7 +128,7 @@ multi-service system the assignment is about.
 > training exercise; would be worth revisiting if this box's CPU is ever
 > upgraded, or on genuinely newer hardware.
 
-### D4 — Full VMs over LXC containers (for the final build)
+### Full VMs over LXC containers (for the final build)
 
 > [!example]- Full reasoning: why VMs won out after LXC was tried first
 > **Context:** LXC was actually tried *first* — it shares the host
@@ -218,7 +159,7 @@ multi-service system the assignment is about.
 > resource pressure becomes a real problem later. Worth remembering this
 > is a live trade-off, not a permanent verdict.
 
-### D5 — A segmented 3-tier shape, not one flat VM
+### A segmented 3-tier shape, not one flat VM
 
 > [!example]- Full reasoning: why proxy/app/db instead of everything on one VM
 > **Context:** the assignment could technically be "satisfied" by
@@ -242,7 +183,7 @@ multi-service system the assignment is about.
 > real multi-service systems require, and papering over it would have
 > undermined the exercise's actual point.
 
-### D6 — Nginx as the reverse proxy
+### Nginx as the reverse proxy
 
 > [!example]- Full reasoning: why Nginx over Apache httpd / Caddy / HAProxy
 > **Alternatives considered:**
@@ -267,7 +208,7 @@ multi-service system the assignment is about.
 > would have worked too, this came down to which config style better
 > demonstrates the underlying concept.
 
-### D7 — Flask as the app framework
+### Flask as the app framework
 
 > [!example]- Full reasoning: why Flask over Django / FastAPI / Node.js / PHP
 > **Alternatives considered:**
@@ -292,14 +233,14 @@ multi-service system the assignment is about.
 > — a real deployment would run it behind a proper WSGI server like
 > Gunicorn. Worth knowing as the natural next step beyond this exercise.
 
-### D8 — MariaDB as the database
+### MariaDB as the database
 
 > [!example]- Full reasoning: why MariaDB over MySQL / PostgreSQL / SQLite
 > **Alternatives considered:**
 > - **MySQL** — the original; Oracle-owned. RHEL/CentOS/AlmaLinux
 >   dropped it as their *default* database years ago specifically in
 >   favor of MariaDB, a community-governed fork, to stay independent of
->   Oracle's licensing direction[^2].
+>   Oracle's licensing direction.
 > - **PostgreSQL** — arguably more standards-compliant SQL and equally
 >   capable technically — this would have worked just as well.
 > - **SQLite** — file-based, with **no network protocol at all**. Using
@@ -309,7 +250,7 @@ multi-service system the assignment is about.
 >
 > **Decision:** MariaDB — it's the literal `mariadb-server` package that
 > ships as AlmaLinux's own default relational database, a zero-friction
-> fit with the OS choice (D2), and it speaks the same wire protocol as
+> fit with the OS choice, and it speaks the same wire protocol as
 > MySQL, so the ordinary `pymysql` client library works against it
 > unmodified.
 >
@@ -317,7 +258,7 @@ multi-service system the assignment is about.
 > mostly "match what the OS already defaults to" rather than a contest
 > between competing strengths.
 
-### D9 — SSH ProxyJump to reach internal VMs
+### SSH ProxyJump to reach internal VMs
 
 > [!example]- Full reasoning: why `-J` over static routes / a VPN / port-forwarding
 > **Alternatives considered:**
@@ -338,7 +279,7 @@ multi-service system the assignment is about.
 
 ---
 
-## 3 · Part One — Standing up Proxmox itself
+## 3 · Part One — Setting Up Proxmox
 
 Before any VM existed, the physical system unit had to become a working
 Proxmox host reachable from the laptop. This alone surfaced four
@@ -525,7 +466,7 @@ each more informative than the last, to surface it:
 > [!bug]- Bug 8 — Tried LXC containers instead — this is what cracked it open
 > Reasoning at the time: containers have no bootloader/firmware step at
 > all, so this should sidestep both prior failures *and* be lighter on
-> this host's limited 3.7 GB RAM (see [[#D4 — Full VMs over LXC containers (for the final build)|D4]]).
+> this host's limited 3.7 GB RAM (see [[#Full VMs over LXC containers (for the final build)|the VMs-vs-LXC decision]]).
 > **Result:** the container's init process (`/sbin/init` → systemd)
 > started, then died within milliseconds. Digging in with
 > `pct mount 100` (mounts a stopped container's disk for direct
@@ -542,15 +483,8 @@ each more informative than the last, to surface it:
 > [!success] The fix
 > Switched the entire exercise to **AlmaLinux 9**, which correctly targets
 > `x86-64-v2`. This also meant going back to full VMs (not containers) for
-> the final build — see [[#D4 — Full VMs over LXC containers (for the final build)|D4]]
-> for why that stuck even after the real fix was in place.
+> the final build.
 
-> [!tip] Why document a dead end this thoroughly
-> Diagnosing *why* something doesn't work — ruling out wrong theories
-> (bootloader bug) before finding the real one (CPU incompatibility) — is
-> exactly the kind of system-level troubleshooting the assignment is
-> actually testing for. The wrong turns are as much the deliverable as the
-> working build.
 
 ---
 
@@ -909,50 +843,3 @@ same second, **is** the "how requests flow between components" deliverable.
 > after the fact during a real investigation.
 
 ---
-
-## 8 · Write-up for Hans
-
-Bring:
-1. The architecture diagram ([[#1 · The end result, at a glance|§1]]) and IP plan ([[#6 · Part Four — Building the three VMs|§6]])
-2. The decision log ([[#2 · Decision log — why each technology was chosen|§2]]) — the *why* behind every choice, not just the *what*
-3. A screenshot/copy of the simultaneous 3-log trace ([[#7 · Part Five — Proving it: tracing one request across every hop|§7]])
-4. This document's bug log (§3–6) as the reasoning trail — the CPU
-   incompatibility discovery in particular is a genuinely strong example
-   of systematic troubleshooting: two plausible-but-wrong theories ruled
-   out before finding the real cause
-
-The reasoning trail *is* the deliverable — the email explicitly said the
-goal is understanding "the purpose of each component, the decisions
-behind the design, and how the overall system works together," not just
-having something running.
-
----
-
-## 9 · Concept glossary
-
-| Concept | One-line explanation | Where it showed up |
-|---|---|---|
-| Three-tier architecture | Presentation / logic / data, separated | §1 |
-| Architecture Decision Record (ADR) | Documenting *why* a technical choice was made, not just what was chosen | §2 |
-| Network segmentation | Isolate what doesn't need to be reachable | §4 |
-| NAT / IP masquerading | Many private hosts share one public exit address | §4 |
-| Ephemeral vs. persistent config | A live command lasts until the next reset; only a saved file/profile survives one | §4 (Bug 10) |
-| x86-64-v1–v4 | CPU instruction-set baseline tiers; not all "64-bit" CPUs are equal | §5 |
-| KVM vs LXC | Full hardware virtualization vs. host-kernel-sharing containers | §5, [[00 — What is Proxmox]] |
-| BIOS vs UEFI | Two different, incompatible PC firmware/boot standards | §5 |
-| DHCP vs static addressing | Leased/dynamic vs. fixed-by-hand IP assignment | §6 |
-| Least privilege | Every account/process gets only the access it strictly needs | §6.1 |
-| systemd services | How to make any script a real, persistent background service | §6.2 |
-| Reverse proxy | A front-door process that forwards requests to a backend | §6.3 |
-| SELinux domains | Per-process-type security confinement, independent of Unix permissions and firewalls | §6.3 |
-| SSH jump host (bastion) | Hopping through one reachable machine to reach an otherwise-isolated one | §2 (D9) |
-
-**External references:**
-- [Proxmox VE Administration Guide](https://pve.proxmox.com/pve-docs/pve-admin-guide.html)
-- [AlmaLinux documentation](https://wiki.almalinux.org/)
-- [Nginx reverse proxy docs](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
-
----
-
-[^1]: Broadcom's acquisition of VMware in 2023 restructured licensing around subscription bundles and ended the free ESXi hypervisor for new deployments in 2024 — a widely-discussed shift in the virtualization industry that made "just use ESXi" no longer a free option for a personal lab.
-[^2]: MySQL's original creators forked it into MariaDB in 2009 after Oracle's acquisition of Sun Microsystems (which owned MySQL) raised community concerns about its long-term openness — RHEL-family distributions switched their default package from `mysql-server` to `mariadb-server` in RHEL 7/CentOS 7 and never looked back.
