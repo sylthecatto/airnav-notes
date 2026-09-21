@@ -528,4 +528,3 @@ flowchart TD
 - [ ] Write all the IaC files (packer HCL + kickstart, terraform HCL, ansible roles)
 - [ ] Decide: destroy VMs 100/101/102 after automation is verified, or keep as reference
 - [ ] Optional: wire up a `Jenkinsfile` like Pair A for fully automated reruns
-
