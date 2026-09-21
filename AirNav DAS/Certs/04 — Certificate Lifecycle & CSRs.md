@@ -42,8 +42,11 @@ created: 2026-09-21
 - Bundles the public key, the Subject DN, and requested extensions (critically: `subjectAltName = DNS:labapp.com`).
 
 ### Stage 3: Verification & Signing
-- The CA reviews the request. In enterprise internal PKI, this may involve checking the hostname against CMDB inventory. In public PKI, this involves ACME HTTP-01/DNS-01 domain challenge verification.
-- The CA generates the certificate and signs it with the CA's private key.
+- The CA reviews the request. In enterprise internal PKI, this involves validating the identity against inventory/CMDB. In public PKI, this involves ACME HTTP-01/DNS-01 domain challenge verification.
+- **Enterprise Extension Handling**:
+  - The CA enforces security profiles (`basicConstraints = critical, CA:FALSE`, `extendedKeyUsage = serverAuth`).
+  - **CSR Extension Preservation**: By default, OpenSSL ignores extensions requested in the CSR. Production CAs configure `copy_extensions = copy` to preserve client-requested Subject Alternative Names while strictly applying CA policy constraints.
+- The CA generates the certificate and cryptographically signs it with the CA's private key.
 
 ### Stage 4: Deployment & Chain Assembly
 - The issued certificate is combined with the intermediate CA into `fullchain.pem`.
@@ -52,7 +55,9 @@ created: 2026-09-21
 
 ### Stage 5: Monitoring & Renewal
 - Automated monitoring tools check expiration dates.
-- CA/Browser Forum rules limit publicly-trusted certificates to **398 days** (approx. 13 months). Internal PKIs often follow 1-year or 2-year lifespans.
+- **Validity Standards (September 2026)**:
+  - CA/Browser Forum Baseline Requirements cap public TLS certificates at **398 days** (approx. 13 months).
+  - Modern industry standards (Google/Apple Root Programs) are transitioning toward shorter 90-day lifespans to enforce automated lifecycle management. Internal enterprise PKIs typically issue 1-year (`default_days = 397`) certificates.
 
 ### Stage 6: Revocation / Retirement
 - Triggered if private key material is compromised, server is decommissioned, or domain ownership changes.

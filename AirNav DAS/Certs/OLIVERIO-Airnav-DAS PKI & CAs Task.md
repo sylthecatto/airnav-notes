@@ -240,6 +240,7 @@ cert_opt          = ca_default
 default_days      = 1825                 # 5-year operational validity
 preserve          = no
 policy            = policy_loose         # Relaxed DN policy for issuing diverse end-entity certificates
+copy_extensions   = copy                 # CRITICAL: Copies SAN extensions from CSR while preserving CA server_cert profile
 
 [ policy_loose ]
 # Loose policy allows leaf certificates with flexible organizational units
@@ -248,7 +249,7 @@ stateOrProvinceName     = optional
 localityName            = optional
 organizationName        = optional
 organizationalUnitName  = optional
-commonName              = supplied
+commonName              = optional       # Modern 2026 standard: CN is optional/deprecated
 emailAddress            = optional
 
 [ req ]
@@ -316,7 +317,11 @@ prompt              = no
 [ req_distinguished_name ]
 countryName         = PH
 organizationName    = AirNav DAS Lab
-commonName          = labapp.com         # Deprecated by RFC 6125, populated for legacy compatibility
+# Common Name (CN) vs SAN in September 2026:
+# CAB Forum Baseline Requirements §7.1.4.2.2 states CAs SHOULD NOT include a commonName attribute.
+# Modern public CAs (Let's Encrypt, Google Trust Services) omit CN completely.
+# For backward compatibility with legacy non-browser TLS clients, commonName can mirror DNS.1:
+commonName          = labapp.com
 
 [ req_ext ]
 subjectAltName      = @alt_names         # Maps Subject Alternative Names block
@@ -342,13 +347,22 @@ chmod 600 labapp.key
 openssl req -new -key labapp.key -out labapp.csr -config server_req.cnf
 
 # 3. Sign Server CSR using Intermediate CA:
+# copy_extensions = copy in openssl.cnf merges the CSR's SANs while applying [ server_cert ]
 cd ~/pki-ca/intermediate-ca
 openssl ca -config openssl.cnf -extensions server_cert \
-    -extfile ~/pki-ca/server/server_req.cnf -extensions req_ext \
     -days 397 -notext -md sha256 \
     -in ~/pki-ca/server/labapp.csr \
     -out ~/pki-ca/server/labapp.crt
 chmod 444 ~/pki-ca/server/labapp.crt
+```
+
+> [!caution] The Double `-extensions` OpenSSL Trap
+> In OpenSSL CLI, passing `-extensions` twice (e.g. `-extensions server_cert ... -extensions req_ext`) **does not merge them**. The second flag silently overwrites the first, stripping `basicConstraints: CA:FALSE` and `extendedKeyUsage`. 
+> The enterprise-grade solution is setting `copy_extensions = copy` inside the CA's `openssl.cnf`, allowing the CA to enforce its strict `server_cert` profile while importing client-requested SANs from the CSR.
+
+```bash
+# Verify both CA constraints and SANs are present:
+openssl x509 -in ~/pki-ca/server/labapp.crt -text -noout | grep -A 10 "X509v3 extensions:"
 
 # 4. Assemble Full Certificate Chain (Leaf + Intermediate):
 cd ~/pki-ca/server
