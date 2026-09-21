@@ -1,52 +1,21 @@
----
-tags:
-  - cybersecurity
-  - pki
-  - certificates
-  - openssl
-  - nginx
-  - tls
-  - task-guide
-  - runbook
-  - presentation
-reading-order: 4.1
-created: 2026-09-21
-aliases:
-  - PKI Master Execution Guide
-  - 2-Tier PKI Runbook
-  - Oliverio PKI Task
----
-
-# 2-Tier PKI, Root & Intermediate CAs, and Nginx HTTPS Setup Guide
-**Author / Engineer**: Oliverio (AirNav DAS Cadet Track)  
-**Environment**: AlmaLinux 9 Management Laptop (`192.168.100.10`), Proxmox VE 3-Tier Stack (`Proxy VM 192.168.100.20`, `App VM 10.10.10.11`, `DB VM 10.10.10.12`)
-
----
-
-## Executive Summary
-
-> [!abstract] The Elevator Pitch
-> *"To secure our 3-tier architecture, we implemented an enterprise-grade **2-Tier Public Key Infrastructure (PKI)** using OpenSSL. Instead of insecure single-tier self-signed certificates, we separated duties between an **Offline Root CA** and an active **Intermediate CA**. We issued a leaf certificate for **`labapp.com`** with **Subject Alternative Names (SAN)** for both domain and IP address. At the network perimeter, we configured **Nginx** to perform **TLS Termination (SSL Offloading)** on Port 443 with TLS 1.2/1.3 and automatic HTTP-to-HTTPS redirection, keeping backend app traffic isolated on internal networks. Finally, we installed the Root CA into the client OS trust store, achieving a warning-free **green padlock**."*
 
 ---
 
 ## Authoritative Standards & Primary Sources
 
-All configurations, cryptographic parameters, and extension profiles implemented in this guide are directly derived from official standards:
-
-| Standard / Reference | Organization / Source | Direct Specification Link | Key Application in This Guide |
-|---|---|---|---|
-| **RFC 5280** | IETF PKIX Working Group | [IETF RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280) | Defines X.509 v3 structure, `basicConstraints`, `keyUsage`, path length limits (`pathlen:0`), and certificate chaining rules. |
-| **RFC 6125** | IETF | [IETF RFC 6125](https://datatracker.ietf.org/doc/html/rfc6125) | Mandates Subject Alternative Names (`subjectAltName`) for domain verification; establishes Common Name (`CN`) deprecation. |
-| **RFC 8446** | IETF | [IETF RFC 8446](https://datatracker.ietf.org/doc/html/rfc8446) | Defines the TLS 1.3 protocol, handshake optimization, and modern AEAD cipher suites. |
-| **NIST SP 800-57 Part 1 Rev. 5** | NIST | [NIST SP 800-57 Part 1](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final) | Prescribes minimum cryptographic key lengths: RSA 4096-bit for long-lived Root CAs, RSA 2048-bit for operational servers. |
-| **NIST SP 800-52 Rev. 2** | NIST | [NIST SP 800-52 Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-52/rev-2/final) | Guidelines for selecting and configuring secure TLS server protocol versions and cipher suites. |
-| **Baseline Requirements v2.0** | CA/Browser Forum | [CAB Forum Baseline Requirements](https://cabforum.org/working-groups/server-certificate/baseline-requirements/) | Enforces maximum 398-day validity for server TLS certificates (`default_days = 397`). |
-| **OpenSSL Configuration Manual** | OpenSSL Project | [OpenSSL x509v3_config(5)](https://www.openssl.org/docs/manmaster/man5/x509v3_config.html) | Formal syntax reference for `openssl.cnf` extension blocks (`v3_ca`, `server_cert`, `req_ext`). |
-| **OpenSSL Utilities Manual** | OpenSSL Project | [OpenSSL ca(1)](https://www.openssl.org/docs/manmaster/man1/openssl-ca.html) & [req(1)](https://www.openssl.org/docs/manmaster/man1/openssl-req.html) | Operational syntax for CA database management and CSR processing. |
-| **Nginx SSL Engine Documentation** | Nginx / F5 | [Nginx ngx_http_ssl_module](https://nginx.org/en/docs/http/ngx_http_ssl_module.html) | Directive syntax for `ssl_certificate`, `ssl_ciphers`, session caching, and ALPN/HTTP2 negotiation. |
-| **Mozilla Modern TLS Profile** | Mozilla Security | [Mozilla SSL Configuration Generator](https://ssl-config.mozilla.org/) | Battle-tested cipher whitelist providing Perfect Forward Secrecy (PFS) via ECDHE. |
-| **RHEL 9 Crypto & Trust Guide** | Red Hat / AlmaLinux | [RHEL 9 Security Hardening](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/security_hardening/using-the-system-wide-cryptographic-policies_security-hardening) | Mechanics of `/etc/pki/ca-trust/source/anchors/` and `update-ca-trust extract`. |
+| Standard / Reference               | Organization / Source   | Direct Specification Link                                                                                                                                                                     | Key Application in This Guide                                                                                                 |
+| ---------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **RFC 5280**                       | IETF PKIX Working Group | [IETF RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280)                                                                                                                                | Defines X.509 v3 structure, `basicConstraints`, `keyUsage`, path length limits (`pathlen:0`), and certificate chaining rules. |
+| **RFC 6125**                       | IETF                    | [IETF RFC 6125](https://datatracker.ietf.org/doc/html/rfc6125)                                                                                                                                | Mandates Subject Alternative Names (`subjectAltName`) for domain verification; establishes Common Name (`CN`) deprecation.    |
+| **RFC 8446**                       | IETF                    | [IETF RFC 8446](https://datatracker.ietf.org/doc/html/rfc8446)                                                                                                                                | Defines the TLS 1.3 protocol, handshake optimization, and modern AEAD cipher suites.                                          |
+| **NIST SP 800-57 Part 1 Rev. 5**   | NIST                    | [NIST SP 800-57 Part 1](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final)                                                                                               | Prescribes minimum cryptographic key lengths: RSA 4096-bit for long-lived Root CAs, RSA 2048-bit for operational servers.     |
+| **NIST SP 800-52 Rev. 2**          | NIST                    | [NIST SP 800-52 Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-52/rev-2/final)                                                                                                      | Guidelines for selecting and configuring secure TLS server protocol versions and cipher suites.                               |
+| **Baseline Requirements v2.0**     | CA/Browser Forum        | [CAB Forum Baseline Requirements](https://cabforum.org/working-groups/server-certificate/baseline-requirements/)                                                                              | Enforces maximum 398-day validity for server TLS certificates (`default_days = 397`).                                         |
+| **OpenSSL Configuration Manual**   | OpenSSL Project         | [OpenSSL x509v3_config(5)](https://www.openssl.org/docs/manmaster/man5/x509v3_config.html)                                                                                                    | Formal syntax reference for `openssl.cnf` extension blocks (`v3_ca`, `server_cert`, `req_ext`).                               |
+| **OpenSSL Utilities Manual**       | OpenSSL Project         | [OpenSSL ca(1)](https://www.openssl.org/docs/manmaster/man1/openssl-ca.html) & [req(1)](https://www.openssl.org/docs/manmaster/man1/openssl-req.html)                                         | Operational syntax for CA database management and CSR processing.                                                             |
+| **Nginx SSL Engine Documentation** | Nginx / F5              | [Nginx ngx_http_ssl_module](https://nginx.org/en/docs/http/ngx_http_ssl_module.html)                                                                                                          | Directive syntax for `ssl_certificate`, `ssl_ciphers`, session caching, and ALPN/HTTP2 negotiation.                           |
+| **Mozilla Modern TLS Profile**     | Mozilla Security        | [Mozilla SSL Configuration Generator](https://ssl-config.mozilla.org/)                                                                                                                        | Battle-tested cipher whitelist providing Perfect Forward Secrecy (PFS) via ECDHE.                                             |
+| **RHEL 9 Crypto & Trust Guide**    | Red Hat / AlmaLinux     | [RHEL 9 Security Hardening](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/security_hardening/using-the-system-wide-cryptographic-policies_security-hardening) | Mechanics of `/etc/pki/ca-trust/source/anchors/` and `update-ca-trust extract`.                                               |
 
 ---
 
