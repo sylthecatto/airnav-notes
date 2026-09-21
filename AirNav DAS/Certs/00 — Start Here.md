@@ -43,9 +43,8 @@ Every technical fact, parameter, and configuration directive here has been verif
 | 02 | [[02 — X.509 Certificates & Anatomy]] | X.509 v3 structure, ASN.1/DER vs PEM, extensions (`basicConstraints`, `keyUsage`, `extKeyUsage`, `SAN`), why CN is dead |
 | 03 | [[03 — Certificate Authorities & Trust Hierarchies]] | 1-tier vs 2-tier vs 3-tier PKI, Root vs Intermediate CAs, offline root principles, path validation algorithm, revocation (CRL/OCSP), OS/browser trust stores |
 | 04 | [[04 — Certificate Lifecycle & CSRs]] | Key generation, CSR structure, proof of possession, issuance, validation, automated vs manual renewal |
-| 05 | [[05 — Hands-On 2-Tier CA & Nginx TLS Implementation]] | Conceptual runbook: 2-Tier architecture, extensions, config mechanics |
-| Task | [[TASK — 2-Tier PKI & HTTPS Setup Guide]] | **The Hands-On Execution Guide**: Exact host prompts, copy-paste blocks, verify steps |
-| 06 | [[06 — Linux High Availability & Floating IPs]] | Stretch Goal: High Availability principles, Active/Passive vs Active/Active, VRRP protocol, Floating Virtual IP (VIP) allocation, Gratuitous ARP, Keepalived setup |
+| Task | [[OLIVERIO-Airnav-DAS PKI & CAs Task]] | **The Hands-On Master Execution Guide**: Complete 2-Tier PKI, Nginx HTTPS setup, line-by-line breakdowns, presentation defense, and evidence gathering playbook |
+| 05 | [[05 — Linux High Availability & Floating IPs]] | Stretch Goal: High Availability principles, Active/Passive vs Active/Active, VRRP protocol, Floating Virtual IP (VIP) allocation, Gratuitous ARP, Keepalived setup |
 
 ---
 
@@ -92,6 +91,7 @@ Laptop Browser (Client)
 ## Suggested Reading Order
 
 1. Read **01 through 04** in sequence to build a rock-solid mental model of *why* certificates work the way they do and avoid the common pitfalls (such as omitting SANs or failing to concatenate intermediate certificates into a full chain).
-2. Execute **05** step-by-step in your lab environment to generate the CA hierarchy, issue the TLS certificate for `labapp.com`, configure Nginx on AlmaLinux 9, and verify a green lock in your browser.
-3. Study **06** to understand how production enterprise systems ensure zero-downtime using redundant proxies and floating virtual IPs.
+2. Execute **[[OLIVERIO-Airnav-DAS PKI & CAs Task]]** step-by-step in your lab environment to generate the 2-Tier CA hierarchy, issue the TLS certificate for `labapp.com`, configure Nginx on AlmaLinux 9, and verify a green lock in your browser.
+3. Study **05** (`[[05 — Linux High Availability & Floating IPs]]`) to understand how production enterprise systems ensure zero-downtime using redundant proxies and floating virtual IPs.
+
 

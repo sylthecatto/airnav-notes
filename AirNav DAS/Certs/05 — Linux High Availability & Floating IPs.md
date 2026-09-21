@@ -6,7 +6,7 @@ tags:
   - keepalived
   - vrrp
   - clustering
-reading-order: 6
+reading-order: 5
 created: 2026-09-21
 ---
 
