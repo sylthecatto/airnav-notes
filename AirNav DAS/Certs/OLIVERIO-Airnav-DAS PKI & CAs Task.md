@@ -346,6 +346,9 @@ chmod 600 labapp.key
 # 2. Generate Server CSR containing SAN extensions:
 openssl req -new -key labapp.key -out labapp.csr -config server_req.cnf
 
+# Verify CSR payload and requested SAN attributes before signing:
+openssl req -in labapp.csr -text -noout | grep -A 4 "Requested Extensions:"
+
 # 3. Sign Server CSR using Intermediate CA:
 # copy_extensions = copy in openssl.cnf merges the CSR's SANs while applying [ server_cert ]
 cd ~/pki-ca/intermediate-ca

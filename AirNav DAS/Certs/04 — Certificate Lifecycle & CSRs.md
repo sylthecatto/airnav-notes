@@ -7,12 +7,15 @@ tags:
   - lifecycle
 reading-order: 4
 created: 2026-09-21
+aliases:
+  - Certificate Lifecycle
+  - CSR Guide
 ---
 
 # Certificate Lifecycle & CSRs
 
-> [!abstract] The 30-second version
-> The life of a digital certificate follows six deterministic stages: **Key Generation**, **CSR Generation**, **Validation & Issuance**, **Deployment**, **Monitoring & Renewal**, and **Revocation**. The critical bridge between the server and the CA is the **CSR (Certificate Signing Request, PKCS#10)**. A CSR contains the server's public key and requested attributes, signed by the server's own private key to establish **Proof of Possession (POP)**. The private key **never leaves the host machine**; only the CSR is sent to the Certificate Authority.
+> [!abstract] The 30-Second Summary
+> The lifecycle of a digital certificate follows six deterministic phases: **Key Generation**, **CSR Generation**, **Validation & Issuance**, **Deployment**, **Monitoring & Renewal**, and **Revocation**. The critical contract between the server and the CA is the **CSR (Certificate Signing Request, [RFC 2986 / PKCS#10](https://datatracker.ietf.org/doc/html/rfc2986))**. A CSR bundles the applicant's public key, identity attributes, and requested extensions (critically: SANs), signed by the applicant's own private key to establish **Proof of Possession (POP)**. The private key **never leaves the host machine**; only the CSR is transmitted to the Certificate Authority.
 
 ---
 
@@ -31,69 +34,68 @@ created: 2026-09-21
 ```
 
 ### Stage 1: Keypair Generation
-- Generated on the target host (e.g. Proxy VM) using high-entropy random number sources (`/dev/urandom`).
-- **Cryptographic choice**:
-  - RSA 2048 or 4096-bit.
-  - ECDSA (`prime256v1` / P-256 or `secp384r1` / P-384).
-- **Security Rule**: File permissions must be locked immediately (`chmod 400` or `chmod 600`, owned by `root:root`).
+- Generated on the target host (Proxy VM) using cryptographically secure pseudorandom number generators (`/dev/urandom`).
+- **Algorithm Choice** ([NIST SP 800-57](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final)): RSA 2048/4096-bit or ECDSA (P-256 / `prime256v1`).
+- **Filesystem Security**: Strict permission lockdown immediately upon creation (`chmod 600`, owned by `root:root`).
 
 ### Stage 2: Certificate Signing Request (CSR) Creation
-- Formatted as **PKCS#10** (RFC 2986).
-- Bundles the public key, the Subject DN, and requested extensions (critically: `subjectAltName = DNS:labapp.com`).
+- Formatted as **PKCS#10** ([RFC 2986](https://datatracker.ietf.org/doc/html/rfc2986)).
+- Bundles the public key, the Subject DN, and requested extensions (critically: `subjectAltName = DNS:labapp.com, IP:192.168.100.20`).
 
 ### Stage 3: Verification & Signing
-- The CA reviews the request. In enterprise internal PKI, this involves validating the identity against inventory/CMDB. In public PKI, this involves ACME HTTP-01/DNS-01 domain challenge verification.
+- The CA reviews the request. In enterprise internal PKI, this involves validating the identity against infrastructure inventory. In public PKI, this involves ACME HTTP-01/DNS-01 domain challenge verification.
 - **Enterprise Extension Handling**:
   - The CA enforces security profiles (`basicConstraints = critical, CA:FALSE`, `extendedKeyUsage = serverAuth`).
-  - **CSR Extension Preservation**: By default, OpenSSL ignores extensions requested in the CSR. Production CAs configure `copy_extensions = copy` to preserve client-requested Subject Alternative Names while strictly applying CA policy constraints.
-- The CA generates the certificate and cryptographically signs it with the CA's private key.
+  - **CSR Extension Preservation**: By default, OpenSSL ignores extensions requested in the CSR. Production CAs configure `copy_extensions = copy` in their configuration to preserve client-requested Subject Alternative Names while strictly applying CA policy constraints.
+- The CA signs the bundle with the CA's private signing key.
 
 ### Stage 4: Deployment & Chain Assembly
-- The issued certificate is combined with the intermediate CA into `fullchain.pem`.
-- Placed on the web server (`/etc/pki/tls/certs/` or `/etc/nginx/ssl/`).
-- Web server config updated and reloaded with zero downtime (`nginx -s reload` or `systemctl reload nginx`).
+- The issued certificate is combined with the Intermediate CA into `fullchain.pem`.
+- Placed on the web server (`/etc/nginx/ssl/fullchain.pem` and `labapp.key`).
+- Web server configuration reloaded with zero downtime (`systemctl reload nginx`).
 
 ### Stage 5: Monitoring & Renewal
-- Automated monitoring tools check expiration dates.
+- Automated monitoring tools alert on approaching expiration dates.
 - **Validity Standards (September 2026)**:
   - CA/Browser Forum Baseline Requirements cap public TLS certificates at **398 days** (approx. 13 months).
-  - Modern industry standards (Google/Apple Root Programs) are transitioning toward shorter 90-day lifespans to enforce automated lifecycle management. Internal enterprise PKIs typically issue 1-year (`default_days = 397`) certificates.
+  - Modern industry standards (Google/Apple Root Programs) are actively shifting towards automated 90-day lifespans. Internal enterprise PKIs typically issue 1-year (`default_days = 397`) certificates.
 
 ### Stage 6: Revocation / Retirement
-- Triggered if private key material is compromised, server is decommissioned, or domain ownership changes.
+- Triggered if private key material is compromised, the server is decommissioned, or domain routing changes.
 
 ---
 
 ## 2 · Anatomy of a Certificate Signing Request (CSR)
 
-What actually lives inside a `.csr` file? You can inspect any CSR with:
-`openssl req -in server.csr -text -noout`
+When you inspect a live CSR (`openssl req -in labapp.csr -text -noout`), OpenSSL decodes the PKCS#10 structure:
 
-A standard PKCS#10 CSR contains three core components:
-
-```
-Certification Request Info:
-├── Version: 0 (v1)
-├── Subject: CN = labapp.com, O = AirNav DAS Lab, C = PH
-├── Subject Public Key Info:
-│   ├── Public Key Algorithm: rsaEncryption (or id-ecPublicKey)
-│   └── Public Key Data: (2048 or 4096 bits)
-└── Attributes / Requested Extensions:
-    ├── basicConstraints: CA:FALSE
-    ├── keyUsage: digitalSignature, keyEncipherment
-    ├── extendedKeyUsage: serverAuth
-    └── subjectAltName:
-        ├── DNS:labapp.com
-        ├── DNS:*.labapp.com
-        └── IP:192.168.100.20
-Signature Algorithm: sha256WithRSAEncryption
-Signature Value: (Signed by the applicant's private key!)
+```text
+Certificate Request:
+    Data:
+        Version: 1 (0x0)
+        Subject: C=PH, O=AirNav DAS Lab, CN=labapp.com
+        Subject Public Key Info:
+            Public Key Algorithm: rsaEncryption
+                Public-Key: (2048 bit)
+                Modulus: 00:bc:dd:b6:a9:fa:...
+                Exponent: 65537 (0x10001)
+        Attributes:
+            Requested Extensions:
+                X509v3 Subject Alternative Name: 
+                    DNS:labapp.com, DNS:*.labapp.com, IP Address:192.168.100.20, IP Address:10.10.10.10
+    Signature Algorithm: sha256WithRSAEncryption
+    Signature Value: 55:4f:db:71:b6:32:... (Self-signed by applicant!)
 ```
 
-### The Concept of Proof of Possession (POP)
-Notice that the CSR has its own **Signature Algorithm** and **Signature Value** at the bottom.
-- **Who signed this?** Not the CA! The **applicant** signed it using their own newly created private key.
-- **Why?** This prevents an attacker from taking somebody else's public key, wrapping it in a CSR with the attacker's own name, and submitting it to a CA. The signature proves mathematically that whoever created the CSR actually holds the private key corresponding to the public key inside the request.
+### The Three Functional Blocks of a CSR:
+1. **Certification Request Info**:
+   - `Subject`: Identity attributes. Under modern [CAB Forum BR §7.1.4.2.2](https://cabforum.org/working-groups/server-certificate/baseline-requirements/), `CN` is deprecated and may be omitted or match one SAN.
+   - `Subject Public Key Info`: The server's 2048-bit RSA public key.
+2. **Attributes / Requested Extensions**:
+   - Holds the `subjectAltName` block (`DNS:labapp.com`, `IP:192.168.100.20`). The applicant asks the CA to include these identifiers.
+3. **Signature Algorithm & Signature Value (Proof of Possession)**:
+   - **Who signed this?** Not the CA! The **applicant** signed the CSR using their own newly created `labapp.key` private key.
+   - **Why?** This provides mathematical **Proof of Possession (POP)**. It prevents an attacker from taking somebody else's public key, wrapping it in a CSR with the attacker's own name, and submitting it to a CA. The signature proves mathematically that whoever created the CSR actually holds the private key corresponding to the public key inside the request.
 
 ---
 
@@ -110,15 +112,20 @@ Target Host (Proxy VM)                  CA Server (Root / Intermediate)
   ├── 2. Generate CSR containing Public Key            │
   │                                                    │
   │────────── 3. Send server.csr (Public) ────────────►│
-  │                                                    ├── 4. Signs CSR with CA Key
-  │                                                    ├── 5. Produces server.crt
+  │                                                    ├── 4. Verifies CSR Signature (POP)
+  │                                                    ├── 5. Signs CSR with CA Key
+  │                                                    ├── 6. Produces server.crt
   │                                                    │
-  │◄───────── 6. Returns server.crt + ca-chain ────────│
+  │◄───────── 7. Returns server.crt + ca-chain ────────│
   │                                                    │
-  ├── 7. Combines into fullchain.pem                   │
-  └── 8. Nginx serves HTTPS                            │
+  ├── 8. Combines into fullchain.pem                   │
+  └── 9. Nginx serves HTTPS                            │
 ```
 
-If an external party, online tool ("free SSL generator website"), or vendor asks you to email them your private key or generates the private key on their servers for you to download:
-**That private key is fundamentally compromised and must not be used.**
+---
 
+## Primary Sources & Standards
+
+- **[IETF RFC 2986](https://datatracker.ietf.org/doc/html/rfc2986)**: *PKCS #10: Certification Request Syntax Specification Version 1.7*.
+- **[IETF RFC 5280 §4.2](https://datatracker.ietf.org/doc/html/rfc5280#section-4.2)**: *Standard Certificate Extensions and Processing Rules*.
+- **[CA/Browser Forum Baseline Requirements §7.1.4](https://cabforum.org/working-groups/server-certificate/baseline-requirements/)**: *Certificate Content and Policy Requirements*.

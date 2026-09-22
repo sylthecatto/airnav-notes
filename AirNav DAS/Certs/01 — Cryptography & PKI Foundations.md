@@ -6,135 +6,173 @@ tags:
   - tls
 reading-order: 1
 created: 2026-09-21
+aliases:
+  - Cryptography Foundations
+  - PKI Fundamentals
 ---
 
 # Cryptography & PKI Foundations
 
-> [!abstract] The 30-second version
-> Cryptography provides four security guarantees: **Confidentiality** (encryption), **Integrity** (hashing/MACs), **Authentication** (digital signatures), and **Non-Repudiation**. Asymmetric cryptography uses mathematically linked keypairs: a **Private Key** (kept secret) and a **Public Key** (distributed freely). However, asymmetric encryption alone fails to solve the **Key Distribution Problem**: if an attacker intercepts your initial connection, they can swap your public key with their own (Man-in-the-Middle). **PKI (Public Key Infrastructure)** solves this by having a mutually trusted third party (a Certificate Authority) cryptographically sign an identity-to-public-key binding.
+> [!abstract] The 30-Second Summary
+> Cryptography provides four security guarantees: **Confidentiality** (encryption), **Integrity** (hashing/MACs), **Authentication** (digital signatures), and **Non-Repudiation**. Asymmetric cryptography uses mathematically linked keypairs: a **Private Key** (kept secret) and a **Public Key** (distributed freely). However, asymmetric math alone fails to solve the **Key Distribution Problem**: if an attacker intercepts your initial connection, they can swap your public key with their own (Man-in-the-Middle). **PKI (Public Key Infrastructure)** solves this by having a mutually trusted third party (a Certificate Authority) cryptographically sign an identity-to-public-key binding ahead of time.
 
 ---
 
 ## 1 · The Four Pillars of Information Security
 
-Every secure transport protocol (TLS, SSH, IPsec) is designed to satisfy four core requirements:
+Every secure transport protocol ([TLS 1.3](https://datatracker.ietf.org/doc/html/rfc8446), SSH, IPsec) satisfies four core security objectives:
 
-| Security Goal | Definition | Cryptographic Primitive |
-|---|---|---|
-| **Confidentiality** | Only authorized parties can read the data. | Symmetric Encryption (AES-GCM, ChaCha20) |
-| **Integrity** | Data cannot be altered in transit without immediate detection. | Cryptographic Hash Functions (SHA-256, SHA-384) & HMACs |
-| **Authentication** | Proof of identity — verifying that the entity you communicate with is who they claim to be. | Digital Signatures (RSA, ECDSA, Ed25519) + PKI |
-| **Non-Repudiation** | The sender cannot falsely deny having sent a specific message or initiated a transaction. | Digital Signatures |
+| Security Goal | Definition | Cryptographic Primitive | Real-World Equivalent |
+|---|---|---|---|
+| **Confidentiality** | Only authorized parties can read the data. | Symmetric Encryption (AES-GCM, ChaCha20-Poly1305) | An opaque, locked briefcase. |
+| **Integrity** | Data cannot be altered in transit without detection. | Cryptographic Hash Functions (SHA-256, SHA-384) | An unbroken wax seal on an envelope. |
+| **Authentication** | Verifying that the entity is who they claim to be. | Digital Signatures (RSA, ECDSA, Ed25519) + PKI | A government-issued passport. |
+| **Non-Repudiation** | The sender cannot deny having sent a transaction. | Digital Signatures | A notarized signature on legal paper. |
 
 ---
 
 ## 2 · Symmetric vs. Asymmetric Cryptography
 
 ```
-SYMMETRIC CRYPTOGRAPHY (Shared Secret)
+SYMMETRIC CRYPTOGRAPHY (Single Shared Secret)
 Alice ─────[Shared Key K]─────► Ciphertext ─────[Shared Key K]─────► Bob
-Fast, handles bulk data encryption. 
-Challenge: How do Alice and Bob securely share K across an untrusted network?
+Fast, hardware-accelerated. Challenge: How do Alice and Bob securely share K over an untrusted network?
 
 ASYMMETRIC CRYPTOGRAPHY (Public / Private Keypair)
 Alice ───[Bob's Public Key]───► Ciphertext ───[Bob's Private Key]───► Bob
-Solves key agreement. Slower computationally (~100x to 1000x slower than symmetric).
+Solves key distribution. Slower computationally (~100x to 1000x slower than symmetric).
 ```
 
-### Symmetric Encryption
-- Uses **one identical key** for both encryption and decryption.
-- **Algorithms**: AES-128, AES-256 (in authenticated modes like GCM - Galois/Counter Mode), ChaCha20-Poly1305.
-- **Strengths**: Extremely high throughput; hardware-accelerated on modern x86/ARM CPUs (AES-NI instruction set).
-- **Limitation**: Key distribution. If $N$ parties need pairwise private communication, you need $\frac{N(N-1)}{2}$ shared keys.
+### The Engineer's Decision Matrix: Algorithms & Standards
 
-### Asymmetric (Public Key) Cryptography
-- Uses a **mathematically linked keypair**:
-  - **Public Key**: Can be shared with the entire world without compromising security.
-  - **Private Key**: Must be kept strictly secret, protected by strict filesystem permissions (`chmod 600` / `chmod 400`), hardware security modules (HSM), or passphrase encryption.
-- **Algorithms**:
-  - **RSA** (Rivest–Shamir–Adleman): Based on the difficulty of factoring the product of two large prime numbers. Modern standard requires **$\ge 2048$ bits** (NIST recommends **3072** or **4096** bits for longer lifespans).
-  - **ECC / ECDSA** (Elliptic Curve Cryptography / Digital Signature Algorithm): Based on the algebraic structure of elliptic curves over finite fields (Discrete Logarithm Problem). A **256-bit ECC key** provides equivalent cryptographic strength to a **3072-bit RSA key**, with dramatically smaller certificate sizes, lower CPU overhead, and faster handshakes. Standard curves: `prime256v1` (NIST P-256), `secp384r1` (NIST P-384).
-  - **Ed25519 / Ed448**: Edwards-curve Digital Signature Algorithm. Extremely high performance and collision/timing-attack resilience.
+You do not need to memorize prime factorization modulo math or elliptic curve polynomial coordinate proofs ($y^2 = x^3 + ax + b$). In production engineering, your focus is selecting the right algorithm and key size according to [NIST SP 800-57 Part 1 Rev. 5](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final):
+
+| Domain | Standardize On | Key Size / Curve | Why This Choice Matters |
+|---|---|---|---|
+| **Bulk Data Encryption** | **AES-GCM** or **ChaCha20-Poly1305** | 256-bit | Hardware-accelerated (AES-NI instructions on x86/ARM), provides AEAD (authenticated encryption). |
+| **SSH Keys** | **Ed25519** | 256-bit | Immune to cache timing side-channel attacks by design, short public keys (68 chars). |
+| **Web Certificates (TLS)** | **ECDSA** (preferred) or **RSA** | P-256 (`prime256v1`) or RSA 3072–4096 | **256-bit ECC matches the security of 3072-bit RSA** with 85% smaller certs, faster handshakes, and lower server CPU load. |
 
 ---
 
 ## 3 · Cryptographic Hash Functions & Digital Signatures
 
-### What is a Hash Function?
-A cryptographic hash function $H(m)$ takes input data of arbitrary size and transforms it into a fixed-length string of bytes (digest) such that:
-1. **Deterministic**: The same input always produces the exact same output.
-2. **Pre-image resistant (One-way)**: Given digest $h$, it is computationally infeasible to find $m$ such that $H(m) = h$.
-3. **Collision resistant**: It is computationally infeasible to find two different messages $m_1 \ne m_2$ such that $H(m_1) = H(m_2)$.
-- **Secure algorithms**: SHA-256, SHA-384, SHA-512 (SHA-2 family), SHA-3.
-- **Broken / Deprecated algorithms**: MD5, SHA-1 (both suffer from practical collision attacks and are strictly forbidden in modern PKI by CA/B Forum and NIST SP 800-131A).
+### What is a Hash Function? (The Digital Blender Analogy)
+
+Think of a cryptographic hash function like a **digital blender**:
+- You drop any amount of data into the blender—whether a single word ("cat") or a 1,000-page book.
+- The blender runs thousands of mathematical mixing cycles and produces a fixed-length string called a **digest** or **hash** (e.g., 256 bits / 64 hexadecimal characters for SHA-256).
+
+```
+[ Your Original File (Any Size) ]
+      │
+      ▼
+ 1. Padding & 512-bit Block Chunking
+ ┌──────────┬──────────┬──────────┐
+ │ Block 1  │ Block 2  │ Block 3  │
+ └────┬─────┴────┬─────┴────┬─────┘
+      │          │          │
+      ▼          ▼          ▼
+ 2. Compression Engine (Bit Shifts, XOR/AND logic, Modular Addition)
+      │
+      ▼
+ ┌────────────────────────────────┐
+ │  Fixed 256-bit Hash Output     │ <-- e.g., "e3b0c44298fc1c149afbf4c8996fb924..." (64 hex chars)
+ └────────────────────────────────┘
+```
+
+#### The Core Properties:
+1. **Deterministic (100% Consistent)**: The input `"cat"` will always produce the exact same 64-character hash. Modifying even one letter (`"Cat"`) completely scrambles the output into unrecognizable randomness (**The Avalanche Effect**).
+2. **Pre-image Resistant (One-Way Street)**: Going forward is trivial (`Data -> Hash`). Going backward is impossible (`Hash -/-> Data`). A hash is **not compression** (like `.zip`); you cannot "decompress" a hash to retrieve the original book.
+3. **Collision Resistant (No Double Matches)**: It is computationally infeasible to find two different files $m_1 \ne m_2$ that yield $H(m_1) = H(m_2)$.
+
+> [!warning] Why MD5 and SHA-1 Are Broken
+> Cryptanalysts found mathematical shortcuts to generate identical hashes for different files (collisions). An attacker can craft a benign document and a virus with the exact same MD5/SHA-1 hash. Consequently, [NIST SP 800-131A](https://csrc.nist.gov/publications/detail/sp/800-131a/rev-2/final) and the [CA/Browser Forum](https://cabforum.org/) strictly ban MD5 and SHA-1 in production PKI. Modern standards mandate **SHA-256**, **SHA-384**, or **SHA-3**.
+
+### Analogy: The King's Physical Wax Seal
+
+Imagine a king sends a 500-page manuscript wrapped in a parcel, stamped with an intricate wax seal:
+- The wax seal **does not store** the 500 pages of text. You cannot read the manuscript by looking at the wax.
+- However, if the recipient receives the parcel with the wax seal unbroken and matching the royal crest, they know two facts:
+  1. This parcel genuinely originated from the king (**Authentication**).
+  2. Nobody tampered with or opened the pages in transit (**Integrity**).
+- **That wax seal is your hash and digital signature.**
+
+---
 
 ### How a Digital Signature Works
 
 A digital signature is **not** raw encryption of an entire file. It is the asymmetric encryption of the file's **hash digest**:
 
 ```
-SIGNING PROCESS (by Sender / Signer):
+SIGNING PROCESS (Sender):
 1. Document / Certificate Data ────────► [ SHA-256 Hash ] ────────► Digest (32 bytes)
 2. Digest + Signer's PRIVATE Key ──────► [ Asymmetric Sign Algorithm ] ──► Digital Signature
 
-VERIFICATION PROCESS (by Recipient / Verifier):
+VERIFICATION PROCESS (Recipient):
 1. Received Document Data ─────────────► [ SHA-256 Hash ] ────────► Computed Digest
 2. Digital Signature + Signer's PUBLIC Key ──► [ Asymmetric Verify ] ──► Decrypted Digest
 3. Check: If (Computed Digest == Decrypted Digest) ──► VALID SIGNATURE!
 ```
 
-> [!info] Concept: What does a valid signature guarantee?
-> 1. **Authentication**: Only the holder of the corresponding private key could have produced the signature.
-> 2. **Integrity**: If even a single byte of the original document was modified after signing, the computed hash will completely diverge from the decrypted digest, causing immediate verification failure.
-
 ---
 
-## 4 · The Key Distribution Problem & The MITM Attack
+## 4 · The Key Distribution Problem: Two Tunnels, One Attacker
 
 Why isn't asymmetric encryption alone sufficient for secure web communications?
 
-Suppose Alice wants to establish an encrypted connection to `labapp.com`:
+Suppose Alice wants to connect securely to `labapp.com`. If an attacker (Eve) sits on the local network (via ARP spoofing, rogue Wi-Fi, or DNS cache poisoning), here is how the **Man-in-the-Middle (MitM)** attack unfolds:
 
 ```
-WITHOUT PKI / CERTIFICATES:
-Alice                               Eve (Attacker / MITM)                 labapp.com
-  │                                           │                                │
-  │─── 1. "Send me your public key" ─────────►│ (Intercepts request)           │
-  │                                           │─── 2. "Send me your public key"──►
-  │                                           │                                │
-  │                                           │◄── 3. Returns Server_PubKey ───│
-  │◄── 4. Returns Eve_PubKey (Fraudulent) ────│ (Eve drops Server_PubKey)      │
-  │                                           │                                │
-  │─── 5. Encrypts secret with Eve_PubKey ───►│                                │
-  │       (Alice thinks it's the server!)     │ (Eve decrypts secret with      │
-  │                                           │  Eve_PrivKey, inspects it,     │
-  │                                           │  re-encrypts with Server_PubKey)
-  │                                           │─── 6. Forwards to server ─────►│
+[ ALICE ]                         [ EVE (Attacker / MitM) ]                    [ LABAPP.COM ]
+    │                                         │                                      │
+    │ ─── 1. "Send me your Public Key" ─────► │ (Intercepts request)                │
+    │                                         │ ─── 2. "Send me your Public Key" ──► │
+    │                                         │                                      │
+    │                                         │ ◄── 3. Receives Real Server_PubKey ──│
+    │ ◄── 4. Sends EVE_PubKey to Alice ────── │ (Drops Server_PubKey, sends own key) │
+    │    ("Here is labapp.com's key!")        │                                      │
+    ├─────────────────────────────────────────┼──────────────────────────────────────┤
+    │                  KEY EXCHANGE & EAVESDROPPING PHASE                            │
+    ├─────────────────────────────────────────┼──────────────────────────────────────┤
+    │                                         │                                      │
+    │ ─── 5. Encrypts "Secret Key X" ───────► │                                      │
+    │        using EVE_PubKey                 │ ─── Decrypts "Secret Key X" using     │
+    │                                         │     EVE_PrivKey (Eve stole the key!) │
+    │                                         │                                      │
+    │                                         │ ─── Re-encrypts "Secret Key X" ────► │
+    │                                         │     using Real Server_PubKey         │
+    ├─────────────────────────────────────────┼──────────────────────────────────────┤
+    │                      ACTIVE TRAFFIC INTERCEPTION                               │
+    ├─────────────────────────────────────────┼──────────────────────────────────────┤
+    │                                         │                                      │
+    │ ◄=====================================► │ ◄==================================► │
+    │   Tunnel A: Encrypted with Key X        │   Tunnel B: Encrypted with Key X     │
+    │          (Alice <---> Eve)              │          (Eve <---> Server)          │
+    │                                         │                                      │
+    │   Alice sends: "Transfer $100 to Bob"   │   Eve modifies: "Transfer $10,000"   │
 ```
 
-Eve successfully eavesdrops on and modifies all traffic. Even though encryption was used, Alice had **no mechanism to authenticate** that `Eve_PubKey` did not belong to `labapp.com`.
-
-This demonstrates the fundamental security axiom:
-> **Confidentiality without authentication is an illusion.**
+> [!caution] The Core Lesson of the MitM Attack
+> 1. **The Math Worked 100% Perfectly**: Alice's encryption to Eve was mathematically unbreakable. Eve's encryption to the server was mathematically unbreakable.
+> 2. **The Identity Failed Completely**: Alice encrypted her data using the wrong entity's public key because she had no built-in mechanism to verify that `EVE_PubKey` genuinely belonged to `labapp.com`.
+> 
+> **Axiom**: *Encryption without authentication is completely useless.*
 
 ---
 
-## 5 · Why PKI Exists
+## 5 · How Trust is Solved: SSH vs. Web PKI
 
-**PKI (Public Key Infrastructure)** is the comprehensive architecture designed to defeat this Man-in-the-Middle vulnerability.
-
-Instead of a server simply handing out an arbitrary public key, it hands out an **X.509 Digital Certificate**:
-1. The certificate packages the server's **Public Key** together with its **Identity attributes** (Domain name: `labapp.com`, Organization, Validity dates).
-2. A mutually trusted authority — a **Certificate Authority (CA)** — inspects the server's claim, verifies ownership of `labapp.com`, and attaches its **own cryptographic digital signature** to that package.
-3. When Alice's browser connects to `labapp.com`, it receives the certificate, checks the CA's signature using the CA's public key (which is already pre-installed and trusted in Alice's operating system), and verifies that the signature is mathematically genuine.
-
-Because Eve does not hold the CA's private signing key, she cannot forge a valid signature for her rogue public key under the domain `labapp.com`. If she tries, the browser displays a security warning: **"Certificate Authority Invalid / Untrusted"**.
+| Approach | Trust Mechanism | How It Works | Vulnerability / Trade-Off |
+|---|---|---|---|
+| **SSH** | **Trust On First Use (TOFU)** | First connection prompts: *"The authenticity of host can't be established. Key fingerprint is SHA256:abc... Continue?"* If accepted, saved in `~/.ssh/known_hosts`. | Vulnerable if an attacker intercepts the **very first connection**. Impractical for the public web (users cannot manually verify millions of site fingerprints). |
+| **Web PKI** | **Certificate Authority (CA) Hierarchy** | A trusted third party (CA) verifies domain ownership ahead of time and cryptographically signs the server's public key into an **X.509 Certificate**. | Requires pre-installed Root CA trust anchors in operating systems and browsers ([RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280)). Solves trust for billions of users with zero manual fingerprint checks. |
 
 ---
 
 ## Primary Sources & Standards
 
-- **NIST Special Publication 800-57 Part 1 Rev. 5**: *Recommendation for Key Management: General* (NIST cryptographic guidelines on key strength and validity periods).
-- **RFC 5280**: *Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile* (IETF standard defining X.509 in IP networks).
-- **RFC 8446**: *The Transport Layer Security (TLS) Protocol Version 1.3* (The modern standard for encrypted web traffic).
-
+- **[NIST SP 800-57 Part 1 Rev. 5](https://csrc.nist.gov/publications/detail/sp/800-57-part-1/rev-5/final)**: *Recommendation for Key Management* (Defines cryptographic algorithm lifespans and key length equivalence).
+- **[IETF RFC 5280](https://datatracker.ietf.org/doc/html/rfc5280)**: *Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*.
+- **[IETF RFC 8446](https://datatracker.ietf.org/doc/html/rfc8446)**: *The Transport Layer Security (TLS) Protocol Version 1.3*.
+- **[NIST SP 800-131A Rev. 2](https://csrc.nist.gov/publications/detail/sp/800-131a/rev-2/final)**: *Transitioning the Use of Cryptographic Algorithms and Key Lengths* (Formal deprecation of MD5 and SHA-1).
