@@ -165,19 +165,18 @@ sequenceDiagram
 > A full clone copies the disk image bit-for-bit. The resulting VM has Nginx, all config files, and AlmaLinux 9 pre-installed. You only need to change IPs and hostnames — not reinstall everything from scratch.
 
 ```bash
-# On Proxmox host (192.168.100.2), via Proxmox web UI or pvesh CLI:
+# On Proxmox host (192.168.100.2) — confirmed VMID map:
+#   100 = db  |  101 = app  |  102 = proxy  (source for clone)
+#   103 = proxy02  ← new backup proxy VM
 
-# Identify the existing Proxy VM ID first (e.g., VMID 102):
-pvesh get /nodes/pve/qemu --output-format=json | grep -E '"vmid"|"name"'
-
-# Full clone to new VMID 103, named proxy02:
+# Full clone of proxy (VMID 102) into proxy02 (VMID 103):
 pvesh create /nodes/pve/qemu/102/clone \
-  --newid 103 \               # new VM ID — pick one not in use
-  --name proxy02 \            # human-readable VM name
-  --full true \               # full clone (independent disk), NOT linked clone
-  --storage local-lvm         # target storage pool — match your Proxmox setup
+  --newid 103 \               # 103 is next available VMID
+  --name proxy02 \            # name visible in Proxmox UI
+  --full true \               # full clone — independent disk, not linked to source
+  --storage local-lvm         # your Proxmox storage pool (check: pvesm status)
 
-# Start the new VM after clone completes:
+# Start the cloned VM:
 pvesh create /nodes/pve/qemu/103/status/start
 ```
 
@@ -501,9 +500,9 @@ systemctl start nginx
 
 ### Test 2: Hard shutdown of Master VM (hardware-level failure)
 ```bash
-# In Proxmox web UI: right-click proxy01 VM → Stop (hard power off)
+# In Proxmox web UI: right-click proxy (VMID 102) → Stop (hard power off)
 # OR via pvesh:
-pvesh create /nodes/pve/qemu/102/status/stop
+pvesh create /nodes/pve/qemu/102/status/stop   # VMID 102 = proxy (Master)
 
 # Expected behavior within ~3 seconds (3 missed VRRP advertisements):
 # - Terminal B: "Master is down! Transitioning to MASTER state"
