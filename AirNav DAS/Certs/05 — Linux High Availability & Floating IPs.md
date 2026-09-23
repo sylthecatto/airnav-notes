@@ -208,12 +208,54 @@ ip addr show ens18   # should show 192.168.100.21
 ip addr show ens19   # should show 10.10.10.21
 ```
 
-> [!tip] Check `/etc/hosts`
-> The clone copies `/etc/hosts` from Proxy 1. Update it to avoid name resolution confusion:
+> [!tip] `/etc/hosts` — Full Network Map
+> Each host only needs entries for machines it **directly communicates with**. The rule: if a packet has to traverse more than one hop to reach a host, you still only add it if your service (Nginx, SSH, etc.) references it by hostname.
+>
+> | Host | LAN IP | Internal IP |
+> |---|---|---|
+> | Management Laptop | `192.168.100.10` | — |
+> | Proxmox Host (`pve`) | `192.168.100.2` | — |
+> | proxy01 (Primary) | `192.168.100.20` | `10.10.10.10` |
+> | proxy02 (Backup) | `192.168.100.21` | `10.10.10.21` |
+> | App VM | — | `10.10.10.11` |
+> | DB VM | — | `10.10.10.12` |
+> | **VIP** (floats) | `192.168.100.100` | — |
+>
+> **Management Laptop** (`/etc/hosts` on `192.168.100.10`):
 > ```bash
-> # /etc/hosts — add/modify entries:
+> # Fix: labapp.com must point to VIP, NOT proxy01's physical IP
+> # Your current entry "192.168.100.20 labapp.com" is wrong — fix it:
+> sudo sed -i 's/192.168.100.20 labapp.com/192.168.100.100 labapp.com/' /etc/hosts
+>
+> # Then add the rest:
+> 192.168.100.2   pve       # Proxmox web UI at https://pve:8006
+> 192.168.100.20  proxy01   # direct admin SSH access
+> 192.168.100.21  proxy02   # direct admin SSH access
+> # Do NOT add 10.10.10.x here — laptop has no route to internal network
+> ```
+>
+> **proxy01 and proxy02** (`/etc/hosts` on each proxy VM):
+> ```bash
+> 127.0.1.1       proxy01           # change to proxy02 on the cloned VM
+> 192.168.100.10  laptop            # management laptop (scp cert source)
+> 192.168.100.20  proxy01           # HA peer reference in logs
+> 192.168.100.21  proxy02           # HA peer reference in logs
+> 192.168.100.100 labapp.com        # VIP → Nginx server_name resolution
+> 10.10.10.11     appvm             # upstream backend (Nginx proxy_pass target)
+> 10.10.10.12     dbvm              # downstream DB (health checks or direct queries)
+> ```
+>
+> **Proxmox host** (`pve`, `192.168.100.2`) — only manages VMs, no internal network access:
+> ```bash
+> 192.168.100.10  laptop
 > 192.168.100.20  proxy01
 > 192.168.100.21  proxy02
+> ```
+>
+> **App VM / DB VM** (`10.10.10.x`) — internal-only, no LAN visibility:
+> ```bash
+> 10.10.10.10     proxy01-internal  # primary proxy reverse-proxy source
+> 10.10.10.21     proxy02-internal  # backup proxy
 > 10.10.10.11     appvm
 > 10.10.10.12     dbvm
 > ```
