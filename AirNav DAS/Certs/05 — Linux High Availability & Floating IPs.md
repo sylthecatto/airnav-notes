@@ -606,59 +606,96 @@ curl -v --cacert /home/aw16/pki-ca/root-ca/certs/root-ca.crt https://labapp.com
 
 ---
 
-## 9 · Troubleshooting
+## 9 · Troubleshooting & Edge Cases
 
-### VIP not appearing on Master after `systemctl start keepalived`
+> [!warning] Real-World Implementation Blockers & Pitfalls
+> During hands-on deployment of the secondary proxy node (`proxy02`), several critical failure modes occur. The following documents these exact technical blockers and their root-cause solutions.
+
+### 9.1 · Air-Gapped / Isolated Subnet Installation Freeze (`Curl error 6`)
+**Symptom:**
+Running `dnf install -y keepalived` on `proxy02` hangs indefinitely at `Downloading Packages:` or fails immediately with:
+`Curl error (6): Couldn't resolve host name for https://mirrors.almalinux.org/mirrorlist/9/appstream`
+
+**Root Cause:**
+1. Dual-NIC VMs (`ens18` LAN and `ens19` Internal) often suffer from routing ambiguity where `ens19` (internal `10.10.10.x` network without a gateway) interferes with `ens18`'s default WAN gateway route.
+2. If `proxy02` lacks direct internet access, `dnf` cannot query remote mirrorlists.
+
+**Solution (Fully Offline Package Transfer):**
+Download the package **and all dependencies** on `proxy01` (which has WAN access), transfer via `scp`, and install offline:
 
 ```bash
-# Check Keepalived journal for errors:
+# 1. On proxy01 (Master): Download keepalived + all dependencies to a clean dir
+mkdir -p /tmp/kp-all-rpms
+dnf download --destdir=/tmp/kp-all-rpms --resolve --alldeps keepalived
+
+# 2. On Management Laptop: Transfer the complete bundle to proxy02
+scp -r root@192.168.100.20:/tmp/kp-all-rpms root@192.168.100.21:/tmp/
+
+# 3. Network route fix on proxy02 (ensure ens19 never overrides default gateway):
+nmcli con mod ens19 ipv4.never-default yes
+nmcli con mod ens18 ipv4.dns "8.8.8.8 1.1.1.1"
+nmcli con up ens18 && nmcli con up ens19
+```
+
+---
+
+### 9.2 · DNF Dependency Collision & Protected Package Errors
+**Symptom:**
+Installing local RPMs using `dnf install -y /tmp/kp-all-rpms/*.rpm` fails with:
+`Problem: The operation would result in broken dependencies for protected packages: systemd, systemd-udev`
+`cannot install both systemd-252-67.el9_8.6 and systemd-252-67.el9_8.2`
+
+**Root Cause:**
+Running `dnf download --alldeps` on a slightly newer/updated system (`proxy01`) fetches updated minor revisions of base system libraries (`glibc`, `systemd`, `libattr`). Attempting to install wildcards (`*.rpm`) forces `dnf` to attempt partial system upgrades without having the complete OS repository index, breaking RPM dependency constraints.
+
+**Solution:**
+Force `dnf` into cache-only, offline mode while instructing it to skip conflicting base system package updates:
+
+```bash
+# On proxy02: Install local RPMs while skipping broken/conflicting system upgrades
+dnf install -y --disablerepo="*" -C --skip-broken /tmp/kp-all-rpms/*.rpm
+```
+
+---
+
+### 9.3 · Keepalived Crashes on Startup (`status=2`, Invalid Argument)
+**Symptom:**
+`systemctl start keepalived` fails immediately. `systemctl status keepalived` shows:
+`Main PID: 13479 (code=exited, status=2)`
+`Shutting down service [192.168.200.2]...`
+
+**Root Cause:**
+Upon installation, AlmaLinux installs a default sample `/etc/keepalived/keepalived.conf` file containing dummy IP ranges (`192.168.200.0/24`) and invalid interface references. `keepalived` fails validation because those networks do not exist on your physical NICs (`ens18`).
+
+**Solution:**
+Replace `/etc/keepalived/keepalived.conf` with the clean, production-valid `BACKUP` configuration (refer to §6.4), then restart:
+
+```bash
+# Check journal for exact syntax error location:
+journalctl -xeu keepalived.service
+
+# Overwrite with valid config and restart:
+systemctl restart keepalived
+systemctl status keepalived   # Should show: Active: active (running)
+```
+
+---
+
+### 9.4 · VIP Not Appearing / Split-Brain Diagnosis
+
+```bash
+# 1. VIP not appearing on Master:
 journalctl -u keepalived --since "5 minutes ago" --no-pager
+# Check firewall: VRRP uses IP Protocol 112 (not TCP/UDP port!)
+firewall-cmd --permanent --add-protocol=vrrp && firewall-cmd --reload
 
-# Common causes:
-# 1. virtual_router_id mismatch between nodes — both must be identical
-# 2. auth_pass mismatch — VRRP advertisements rejected silently
-# 3. VRRP protocol (112) blocked by firewall:
-firewall-cmd --list-protocols   # should include 'vrrp'
-# Fix: firewall-cmd --permanent --add-protocol=vrrp && firewall-cmd --reload
+# 2. Both nodes claim MASTER (Split-Brain):
+# Capture VRRP multicast heartbeats on Backup node:
+tcpdump -i ens18 proto 112 -c 10
+# If packets are received but backup stays MASTER: verify `auth_pass` and `virtual_router_id` match.
 
-# 4. Another device on the segment is already using VRID 51 — change virtual_router_id
-```
-
-### Both nodes claim MASTER simultaneously (split-brain)
-
-```bash
-# Symptom: both `ip addr show ens18` on proxy01 AND proxy02 show the VIP.
-# Cause: VRRP multicast traffic blocked between nodes (same-host firewall, or VLAN isolation)
-
-# Capture VRRP traffic to confirm heartbeats are reaching Backup:
-tcpdump -i ens18 proto 112 -c 10  # run on proxy02 — should see packets from proxy01
-
-# If no packets: check that firewall-cmd --add-protocol=vrrp is applied on MASTER
-# If packets are seen but both still MASTER: auth_pass mismatch or VRID mismatch
-```
-
-### Nginx fails to start on Backup (before VIP is assigned)
-
-```bash
-# Confirm ip_nonlocal_bind is set to 1:
-sysctl net.ipv4.ip_nonlocal_bind   # expected: net.ipv4.ip_nonlocal_bind = 1
-
-# If 0: re-apply and confirm file exists:
-cat /etc/sysctl.d/99-keepalived.conf  # must contain: net.ipv4.ip_nonlocal_bind = 1
-sysctl --system
-```
-
-### Cert or TLS error after failover
-
-```bash
-# Verify both proxies serve the exact same cert:
-# On proxy01:
-openssl s_client -connect 192.168.100.20:443 -brief 2>/dev/null | grep "Server certificate"
-# On proxy02:
-openssl s_client -connect 192.168.100.21:443 -brief 2>/dev/null | grep "Server certificate"
-
-# Fingerprints must match. If proxy02 has an old/different cert:
-# Re-run the scp commands in §5.3 and reload Nginx.
+# 3. Nginx Non-Local Bind Error:
+sysctl net.ipv4.ip_nonlocal_bind   # Must output = 1
 ```
 
 ---
