@@ -423,7 +423,7 @@ global_defs {
 # `killall -0 nginx` sends signal 0 (no actual signal) — it just checks if the process exists.
 # Exit code 0 = Nginx is running. Exit code non-0 = Nginx is dead.
 vrrp_script check_nginx {
-    script "/usr/bin/killall -0 nginx"
+    script "/usr/bin/pidof nginx"
     interval 2      # check every 2 seconds
     weight -20      # if script fails: priority 101 - 20 = 81, which is < Backup's 100 → Backup takes over
     fall 2          # must fail 2 consecutive checks before triggering weight change (avoids flapping on transient errors)
@@ -465,7 +465,7 @@ global_defs {
 }
 
 vrrp_script check_nginx {
-    script "/usr/bin/killall -0 nginx"
+    script "/usr/bin/pidof nginx"
     interval 2
     weight -20                           # if Backup's Nginx also dies: 100-20=80, won't affect Master election
     fall 2
@@ -734,3 +734,25 @@ Keepalived on separate VMs on the same virtual switch avoids this: VRRP multicas
 
 > [!info] Red Hat HA documentation covers Pacemaker + Corosync in detail for RHEL 9 / AlmaLinux 9:
 > [Red Hat HA Add-On Guide](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/configuring_and_managing_high_availability_clusters/index)
+
+---
+
+### 9.5 · Health Check Script Execution Failure (`killall` missing)
+**Symptom:**
+Stopping Nginx (`systemctl stop nginx`) on `proxy01` does not release the Virtual IP (`192.168.100.100`), and `proxy02` never transitions to `MASTER`.
+
+**Root Cause:**
+AlmaLinux 9 Minimal installations do not include the `psmisc` package (which provides `/usr/bin/killall`). When Keepalived attempts to execute `vrrp_script check_nginx` containing `/usr/bin/killall -0 nginx`, the shell returns exit code `127` (Command Not Found). Keepalived logs `Script check_nginx now returning 1`, but because the executable itself is missing, the health check script behavior is erratic.
+
+**Solution:**
+Use `/usr/bin/pidof nginx` (provided by standard `sysvinit-tools` / coreutils on all RHEL/AlmaLinux builds):
+
+```ini
+vrrp_script check_nginx {
+    script "/usr/bin/pidof nginx"
+    interval 2
+    weight -20
+    fall 2
+    rise 2
+}
+```
