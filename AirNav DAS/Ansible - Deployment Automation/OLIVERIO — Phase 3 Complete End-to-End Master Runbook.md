@@ -71,53 +71,69 @@ flowchart TD
 
 ---
 
-## 1 · Step 0: Preserving Your Phase 2 Environment
+## 1 · Step 0: Preserving Your Phase 2 Environment & Proxmox Snapshots
 
-> [!danger] Do Not Delete Anything Until You Complete This Step!
-> In Phase 2, you manually deployed NGINX, Keepalived HA, OpenSSL 3.5 PKI, and MariaDB. While Proxmox snapshots freeze virtual disk blocks, an immutable text backup on your laptop guarantees you can inspect, diff, or restore individual configuration files at any time.
+> [!important] Good News: Your Proxmox Snapshots Are Already Safe!
+> We inspected your Proxmox VE host (`192.168.100.2`) and verified that every single one of your Phase 2 virtual machines already has a clean, active snapshot named **`finishedHA-preAutomation`** recorded on **2026-09-24 01:41**:
+> - **VM 100 (`db`)**: `finishedHA-preAutomation`
+> - **VM 101 (`app`)**: `finishedHA-preAutomation`
+> - **VM 102 (`proxy`)**: `finishedHA-preAutomation`
+> - **VM 103 (`proxy02`)**: `finishedHA-preAutomation`
+>
+> If anything ever goes wrong, you can instantly restore any VM to its exact Phase 2 state in seconds with:
+> ```bash
+> # Run on Proxmox host (192.168.100.2):
+> qm rollback 102 finishedHA-preAutomation
+> ```
 
-Run these commands from your **Management Laptop** terminal:
+---
+
+### 1.1 Why the `scp: /tmp/proxy01-configs.tar.gz: No such file or directory` Error Happened
+When you ran the multi-line SSH script, your terminal asked:
+`root@192.168.100.20's password:`
+Because passwordless SSH keys were not yet installed from your laptop to `proxy01` and `proxy02`, running multiple chained commands (`ssh` -> `scp` -> `ssh`) interrupted the input stream. The `scp` command fired before the remote `tar` command finished creating `/tmp/proxy01-configs.tar.gz`.
+
+---
+
+### 1.2 Exporting Full Standalone VM Backups from Proxmox VE (`vzdump`)
+Instead of wrestling with per-file SSH copy commands, you can export complete, standalone **Proxmox Virtual Machine Archive (`.vma.zst`)** backups directly from the hypervisor.
+
+Run this single command on your **laptop** (which already has passwordless SSH to Proxmox):
 
 ```bash
-# 1. Create a clean preservation folder on your laptop:
-mkdir -p ~/phase2-preservation/{proxy01,proxy02,appvm,dbvm,pki-ca}
+# 1. Trigger Proxmox native live snapshot backup for all 4 VMs to local storage:
+# (vzdump creates a consistent live snapshot without turning off the VMs)
+ssh root@192.168.100.2 "vzdump 100 101 102 103 --mode snapshot --compress zstd --storage local"
 
-# 2. Back up local PKI CA keys and certificates if stored in ~/pki-ca:
-if [ -d ~/pki-ca ]; then
-    cp -a ~/pki-ca/* ~/phase2-preservation/pki-ca/ 2>/dev/null || true
-    echo "[OK] Local PKI artifacts backed up."
-fi
+# 2. View the generated backup archives on Proxmox:
+ssh root@192.168.100.2 "ls -lh /var/lib/vz/dump/"
 
-# 3. Harvest configuration files from proxy01 (192.168.100.20):
-echo "Harvesting proxy01 configs..."
-ssh -o StrictHostKeyChecking=no root@192.168.100.20 "tar -czf /tmp/proxy01-configs.tar.gz \
-    /etc/nginx \
-    /etc/keepalived \
-    /etc/hosts \
-    /etc/sysctl.d \
-    /etc/pki/nginx 2>/dev/null"
-scp -o StrictHostKeyChecking=no root@192.168.100.20:/tmp/proxy01-configs.tar.gz ~/phase2-preservation/proxy01/
-ssh -o StrictHostKeyChecking=no root@192.168.100.20 "rm -f /tmp/proxy01-configs.tar.gz"
+# 3. (Optional) Download the full backup images from Proxmox directly to your laptop:
+mkdir -p ~/proxmox-phase2-backups
+scp root@192.168.100.2:/var/lib/vz/dump/vzdump-qemu-*.vma.zst ~/proxmox-phase2-backups/
+echo "✅ Complete Proxmox VM backups are now safely stored on your laptop in ~/proxmox-phase2-backups/"
+```
 
-# 4. Harvest configuration files from proxy02 (192.168.100.21):
-echo "Harvesting proxy02 configs..."
-ssh -o StrictHostKeyChecking=no root@192.168.100.21 "tar -czf /tmp/proxy02-configs.tar.gz \
-    /etc/keepalived \
-    /etc/hosts \
-    /etc/sysctl.d 2>/dev/null"
-scp -o StrictHostKeyChecking=no root@192.168.100.21:/tmp/proxy02-configs.tar.gz ~/phase2-preservation/proxy02/
-ssh -o StrictHostKeyChecking=no root@192.168.100.21 "rm -f /tmp/proxy02-configs.tar.gz"
+---
 
-# 5. Extract archives locally for instant reference and searchability:
-cd ~/phase2-preservation/proxy01 && tar -xzf proxy01-configs.tar.gz 2>/dev/null || true
-cd ~/phase2-preservation/proxy02 && tar -xzf proxy02-configs.tar.gz 2>/dev/null || true
+### 1.3 Exporting Text Configurations Cleanly (One-Liner Method)
+If you also want the raw text configs (`/etc/nginx`, `/etc/keepalived`) without interactive prompts, run this clean one-liner from your laptop:
 
-# 6. Create a single, compressed, timestamped tarball archive:
-cd ~
-tar -czf "phase2-complete-backup-$(date +%Y%m%d).tar.gz" phase2-preservation/
-echo "=========================================================="
-echo "✅ PRESERVATION COMPLETE!"
-echo "Backup stored at: ~/phase2-complete-backup-$(date +%Y%m%d).tar.gz"
+```bash
+# Set up passwordless SSH to proxy01 first so scp never fails:
+ssh-copy-id root@192.168.100.20
+ssh-copy-id root@192.168.100.21
+
+# Now extract configs reliably:
+mkdir -p ~/phase2-preservation/{proxy01,proxy02}
+ssh root@192.168.100.20 "tar -czf - /etc/nginx /etc/keepalived /etc/hosts 2>/dev/null" > ~/phase2-preservation/proxy01/proxy01-configs.tar.gz
+ssh root@192.168.100.21 "tar -czf - /etc/keepalived /etc/hosts 2>/dev/null" > ~/phase2-preservation/proxy02/proxy02-configs.tar.gz
+
+# Extract locally:
+cd ~/phase2-preservation/proxy01 && tar -xzf proxy01-configs.tar.gz
+cd ~/phase2-preservation/proxy02 && tar -xzf proxy02-configs.tar.gz
+echo "✅ Text configuration harvest complete!"
+```
 echo "=========================================================="
 ls -lh ~/phase2-complete-backup-$(date +%Y%m%d).tar.gz
 ```
@@ -1266,3 +1282,46 @@ ansible-playbook site.yml
    - *A:* RFC 5280 and modern CA/Browser Forum rules deprecate relying on the Common Name (CN). Modern TLS clients (like curl and Chrome) require matching SAN entries (`DNS:labapp.com`, `IP:192.168.100.20`) to prevent domain impersonation.
 10. **Q: How do you secure credentials and sensitive keys in enterprise Ansible?**
     - *A:* Using **Ansible Vault** (`ansible-vault`), which provides AES-256 encryption for variable files or playbooks, allowing safe storage in Git repositories.
+
+---
+
+## 13 · Official Project Requirements & Final Demonstration Checklist
+
+> [!important] Official AIR-DAS Phase 3 Grading Rubric (Sir Jayrose / FCO Engineering)
+
+### Core Project Requirements Audit
+- [ ] **Single Master Playbook**: `site.yml` orchestrates the complete 3-tier platform end-to-end.
+- [ ] **Three-VM Platform**: Configures `control01` (VM3), `proxy01` (VM1), and `web01` (VM2).
+- [ ] **Declarative Ansible Modules**: Packages (`dnf`), templates (`template`), services (`service`), firewalls (`firewalld`), SELinux (`seport`/`seboolean`), and hosts (`lineinfile`).
+- [ ] **Centralized Variables**: No hardcoded magic IPs, ports, or FQDNs; variables segregated into `group_vars/` and role defaults.
+- [ ] **Event-Driven Handlers**: Services reload/restart only when configurations change; zero flapping.
+- [ ] **Pre-Flight Validation**: `validate: 'nginx -t -c %s'` verifies NGINX templates before placing them in production.
+
+### End-of-Week Automated Launch Checklist
+During your technical evaluation with the engineering team, demonstrate the following items in order:
+1. [ ] **Present the Blueprint**: Show the 3-VM architecture diagram (`VM3 -> VM1 -> VM2`) and explain inventory groupings.
+2. [ ] **Code Walkthrough**: Explain `inventory/hosts.ini`, `group_vars/`, roles, templates, and `site.yml`.
+3. [ ] **Automated Launch Execution**: Run `ansible-playbook site.yml` against clean VMs.
+4. [ ] **Backend Web Server Verification**: Show Apache serving dynamic content locally on `web01`.
+5. [ ] **Reverse Proxy Verification**: Show NGINX forwarding client requests to Apache.
+6. [ ] **Internal PKI Inspection**: Show Root CA and server certificate created by the automation with modern SANs.
+7. [ ] **Client Trust Verification**: Show Root CA installed in `/etc/pki/ca-trust/source/anchors/` on `control01`.
+8. [ ] **Name Resolution Verification**: Show `labapp.com` resolving to NGINX IP via `/etc/hosts`.
+9. [ ] **End-to-End HTTPS Access**: Connect via HTTPS (`curl -Iv https://labapp.com`) without certificate warnings.
+10. [ ] **Repeatability & Idempotency Proof**: Run `ansible-playbook site.yml` a second time; prove `changed=0`.
+11. [ ] **Controlled Drift Demonstration**: Tamper with `index.html`, run `ansible-playbook site.yml --diff`, and show Ansible restoring compliance.
+
+### Completion Review Sign-Off Matrix
+
+| Review Area | Completion Evidence Required | Verification Method | Status |
+|---|---|---|:---:|
+| **Ansible Foundation** | Learning summary and automation blueprint | Present blueprint diagram and role hierarchy | ⬜ Pending |
+| **Project Structure** | Inventory, variables, master playbook, and README | Review `ansible.cfg`, `hosts.ini`, `site.yml` | ⬜ Pending |
+| **Apache Automation** | Working webpage and backend verification | `curl http://192.168.100.22` returns dynamic HTML | ⬜ Pending |
+| **NGINX Automation** | Working reverse proxy and managed configuration | `curl http://192.168.100.20` proxies to Apache | ⬜ Pending |
+| **Internal PKI Automation** | Root CA and server certificate created & verified | `openssl verify -CAfile root-ca.crt server.crt` | ⬜ Pending |
+| **Client Configuration** | FQDN mapping and Root CA available on client | `getent hosts labapp.com` & `trust list` | ⬜ Pending |
+| **End-to-End Verification** | Trusted HTTPS access to the expected webpage | `curl -Iv https://labapp.com` (200 OK, TLS verify OK) | ⬜ Pending |
+| **Repeatability** | Second run (`changed=0`) and drift correction | Run 2 recap comparison & `--diff` drift recovery | ⬜ Pending |
+| **Final Demonstration** | Automated launch and technical explanation | Live defense interview with Sir Jayrose | ⬜ Pending |
+
