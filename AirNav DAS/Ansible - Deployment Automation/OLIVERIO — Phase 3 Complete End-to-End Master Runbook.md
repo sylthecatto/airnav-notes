@@ -191,24 +191,36 @@ echo "✅ Complete Proxmox VM backups are now safely stored on your laptop in ~/
 
 ---
 
-### 2.3 Exporting Text Configurations Cleanly (One-Liner Method)
-If you also want the raw text configs (`/etc/nginx`, `/etc/keepalived`) without interactive prompts, run this clean one-liner from your laptop:
+### 2.3 Exporting Text Configurations Cleanly (`scp -r` Method)
+> [!tip] Technical Discovery: Why `tar` Threw "Unexpected end of file"
+> On AlmaLinux 9 minimal, the `tar` package is **not installed by default**! When running `ssh root@... "tar -czf - ..."`, the remote shell returned `bash: tar: command not found`. Because standard output was empty (0 bytes), your laptop's local `tar` saw an empty stream (`gzip: stdin: unexpected end of file`).
+>
+> To bypass this, we use native recursive **`scp -r`**, which requires zero external utilities on the remote nodes:
 
 ```bash
-# Set up passwordless SSH to proxy01 first so scp never fails:
-ssh-copy-id root@192.168.100.20
-ssh-copy-id root@192.168.100.21
+# 1. Pull NGINX, Keepalived, and network configs directly:
+mkdir -p ~/phase2-preservation/proxy01/etc ~/phase2-preservation/proxy02/etc
+scp -r root@192.168.100.20:/etc/nginx ~/phase2-preservation/proxy01/etc/
+scp -r root@192.168.100.20:/etc/keepalived ~/phase2-preservation/proxy01/etc/
+scp root@192.168.100.20:/etc/hosts ~/phase2-preservation/proxy01/etc/hosts
 
-# Now extract configs reliably without creating temporary files on the remote nodes:
-mkdir -p ~/phase2-preservation/{proxy01,proxy02}
-ssh root@192.168.100.20 "tar -czf - /etc/nginx /etc/keepalived /etc/hosts 2>/dev/null" > ~/phase2-preservation/proxy01/proxy01-configs.tar.gz
-ssh root@192.168.100.21 "tar -czf - /etc/keepalived /etc/hosts 2>/dev/null" > ~/phase2-preservation/proxy02/proxy02-configs.tar.gz
+scp -r root@192.168.100.21:/etc/keepalived ~/phase2-preservation/proxy02/etc/
+scp root@192.168.100.21:/etc/hosts ~/phase2-preservation/proxy02/etc/hosts
 
-# Extract locally for instant inspection:
-cd ~/phase2-preservation/proxy01 && tar -xzf proxy01-configs.tar.gz
-cd ~/phase2-preservation/proxy02 && tar -xzf proxy02-configs.tar.gz
-echo "✅ Text configuration harvest complete!"
+# 2. Package everything into your final local archive:
+cd ~ && tar -czf phase2-complete-backup-$(date +%Y%m%d).tar.gz phase2-preservation/
+echo "✅ Text configuration harvest complete! Stored at ~/phase2-complete-backup-$(date +%Y%m%d).tar.gz"
 ```
+
+---
+
+### 2.4 Preservation Status: 100% Secured!
+Your Phase 2 environment is now secured across **two independent redundancy tiers**:
+1. **Hypervisor Tier (`~/proxmox-phase2-backups/`)**: 7.3 GB of full, bootable Proxmox `.vma.zst` disk image backups for all 4 VMs (100, 101, 102, 103).
+2. **Configuration Tier (`~/phase2-preservation/`)**: Clean directory tree containing all NGINX configs, Keepalived VIP scripts, hosts files, and PKI Root/Intermediate CA keys.
+
+You can now safely proceed to **Step 1: Decommissioning & Provisioning Clean VMs on Proxmox**.
+
 
 ---
 
