@@ -41,31 +41,31 @@ updated: 2026-09-24
 flowchart TD
     subgraph Proxmox_Hypervisor["Proxmox VE Hypervisor Host (192.168.100.2)"]
         subgraph Control_Client_Tier["Client / Management Tier"]
-            VM3["VM3: control-vm3 (VMID 106)\nIP: 192.168.100.30\n• Ansible Control Node\n• Internal PKI Root CA Authority\n• Verification Client (Trust Store & /etc/hosts)"]
+            VM3["VM3: control-vm3 (VMID 106)\nIP: 192.168.100.40\n• Ansible Control Node\n• Internal PKI Root CA Authority\n• Verification Client (Trust Store & /etc/hosts)"]
         end
 
         subgraph Reverse_Proxy_Tier["Gateway / Ingress Tier"]
-            VM1["VM1: proxy-vm1 (VMID 104)\nLAN IP: 192.168.100.20\n• NGINX Reverse Proxy (HTTPS:443)\n• TLS Server Cert with SAN (labapp.com)\n• HTTP:80 -> HTTPS:443 301 Redirect"]
+            VM1["VM1: proxy-vm1 (VMID 104)\nLAN IP: 192.168.100.41\n• NGINX Reverse Proxy (HTTPS:443)\n• TLS Server Cert with SAN (labapp.com)\n• HTTP:80 -> HTTPS:443 301 Redirect"]
         end
 
         subgraph Backend_Web_Tier["Application Tier"]
-            VM2["VM2: web-vm2 (VMID 105)\nLAN/Private IP: 192.168.100.22\n• Apache HTTP Server (httpd:80)\n• Dynamic Jinja2 Landing Page\n• Firewalld & SELinux Enforced"]
+            VM2["VM2: web-vm2 (VMID 105)\nLAN/Private IP: 192.168.100.42\n• Apache HTTP Server (httpd:80)\n• Dynamic Jinja2 Landing Page\n• Firewalld & SELinux Enforced"]
         end
     end
 
     VM3 ==>|"Ansible Control Plane\n(SSH Port 22 / Agentless)"| VM1
     VM3 ==>|"Ansible Control Plane\n(SSH Port 22 / Agentless)"| VM2
     VM3 -.->|"End-to-End User Traffic\nHTTPS: https://labapp.com:443"| VM1
-    VM1 -.->|"Reverse Proxied Traffic\nHTTP: http://192.168.100.22:80"| VM2
+    VM1 -.->|"Reverse Proxied Traffic\nHTTP: http://192.168.100.42:80"| VM2
 ```
 
 ### Complete Node Identity Matrix
 
 | Hostname | VMID | Role in Phase 3 | IP Address | Subnet / Gateway | vCPU / RAM / Disk |
 |---|:---:|---|---|---|:---:|
-| `control-vm3` | **106** | Ansible Control Node & Client | `192.168.100.30/24` | GW: `192.168.100.1` | 2 vCPU / 1280 MB / 20 GB |
-| `proxy-vm1` | **104** | NGINX Reverse Proxy Gateway | `192.168.100.20/24` | GW: `192.168.100.1` | 1 vCPU / 1280 MB / 15 GB |
-| `web-vm2` | **105** | Backend Apache Web Server | `192.168.100.22/24` | GW: `192.168.100.1` | 1 vCPU / 1280 MB / 15 GB |
+| `control-vm3` | **106** | Ansible Control Node & Client | `192.168.100.40/24` | GW: `192.168.100.1` | 2 vCPU / 1280 MB / 20 GB |
+| `proxy-vm1` | **104** | NGINX Reverse Proxy Gateway | `192.168.100.41/24` | GW: `192.168.100.1` | 1 vCPU / 1280 MB / 15 GB |
+| `web-vm2` | **105** | Backend Apache Web Server | `192.168.100.42/24` | GW: `192.168.100.1` | 1 vCPU / 1280 MB / 15 GB |
 | *(Cold Backup)* `proxy01` | 102 | Phase 2 Proxy (Preserved on Disk) | (Powered Off) | - | Preserved |
 | *(Cold Backup)* `proxy02` | 103 | Phase 2 HA Backup (Preserved on Disk) | (Powered Off) | - | Preserved |
 | *(Cold Backup)* `appvm` | 101 | Phase 2 App (Preserved on Disk) | (Powered Off) | - | Preserved |
@@ -352,7 +352,7 @@ Inside the installer under **Network & Host Name**:
 1. Toggle the network adapter **ON** (slide the Ethernet button to ON).
 2. Click **Configure** → **IPv4 Settings**:
    - **Method**: `Manual`
-   - **Address**: `192.168.100.20`
+   - **Address**: `192.168.100.41`
    - **Netmask**: `255.255.255.0` (or `/24`)
    - **Gateway**: `192.168.100.1`
    - **DNS Servers**: `192.168.100.1,8.8.8.8`
@@ -362,12 +362,16 @@ Inside the installer under **Network & Host Name**:
 #### Step B: Post-Install Network & Hosts Configuration (SSH from your laptop)
 After AlmaLinux boots, SSH in from your laptop and finalize setup:
 
-> [!tip] Stale Host Key Notice (Automated Fix Already Applied)
-> Because `proxy-vm1` reuses the IP `192.168.100.20`, an SSH client will normally detect a new host fingerprint and show `REMOTE HOST IDENTIFICATION HAS CHANGED!`. To clear the old Phase 2 key, the command is `ssh-keygen -R 192.168.100.20`. *(This has already been run on your laptop, so your connection will proceed smoothly!)*
+> [!important] If You Already Installed `proxy-vm1` with `192.168.100.20`:
+> If you already configured `192.168.100.20` during the installer, run this one-line command inside `proxy-vm1` (via Proxmox Console or SSH) to switch its static IP to `192.168.100.41`:
+> ```bash
+> nmcli con mod ens18 ipv4.addresses 192.168.100.41/24 && nmcli con up ens18
+> ```
+> This guarantees all Phase 3 VMs (`.40`, `.41`, `.42`) use completely unique, conflict-free IPs with fresh host keys!
 
 ```bash
 # SSH in from your management laptop:
-ssh root@192.168.100.20
+ssh root@192.168.100.41
 
 
 # 1. Verify static IP is correct:
@@ -381,9 +385,9 @@ echo "proxy-vm1" > /etc/hostname
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
-192.168.100.30 control-vm3
-192.168.100.20 proxy-vm1
-192.168.100.22 web-vm2
+192.168.100.40 control-vm3
+192.168.100.41 proxy-vm1
+192.168.100.42 web-vm2
 192.168.100.2  pve
 192.168.100.10 laptop
 EOF
@@ -416,7 +420,7 @@ Inside the installer under **Network & Host Name**:
 1. Toggle the network adapter **ON**.
 2. Click **Configure** → **IPv4 Settings**:
    - **Method**: `Manual`
-   - **Address**: `192.168.100.22`
+   - **Address**: `192.168.100.42`
    - **Netmask**: `255.255.255.0` (or `/24`)
    - **Gateway**: `192.168.100.1`
    - **DNS Servers**: `192.168.100.1,8.8.8.8`
@@ -426,7 +430,7 @@ Inside the installer under **Network & Host Name**:
 #### Step B: Post-Install Network & Hosts Configuration
 ```bash
 # SSH in from your management laptop:
-ssh root@192.168.100.22
+ssh root@192.168.100.42
 
 # 1. Verify static IP is correct:
 ip addr show ens18
@@ -439,9 +443,9 @@ echo "web-vm2" > /etc/hostname
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
-192.168.100.30 control-vm3
-192.168.100.20 proxy-vm1
-192.168.100.22 web-vm2
+192.168.100.40 control-vm3
+192.168.100.41 proxy-vm1
+192.168.100.42 web-vm2
 192.168.100.2  pve
 192.168.100.10 laptop
 EOF
@@ -450,7 +454,7 @@ EOF
 dnf install -y tar curl openssl wget
 
 # 5. Verify connectivity:
-ping -c 2 192.168.100.20
+ping -c 2 192.168.100.41
 
 echo "✅ web-vm2 ready!"
 ```
@@ -473,7 +477,7 @@ Inside the installer under **Network & Host Name**:
 1. Toggle the network adapter **ON**.
 2. Click **Configure** → **IPv4 Settings**:
    - **Method**: `Manual`
-   - **Address**: `192.168.100.30`
+   - **Address**: `192.168.100.40`
    - **Netmask**: `255.255.255.0` (or `/24`)
    - **Gateway**: `192.168.100.1`
    - **DNS Servers**: `192.168.100.1,8.8.8.8`
@@ -483,7 +487,7 @@ Inside the installer under **Network & Host Name**:
 #### Step B: Post-Install Network & Hosts Configuration
 ```bash
 # SSH in from your management laptop:
-ssh root@192.168.100.30
+ssh root@192.168.100.40
 
 # 1. Verify static IP is correct:
 ip addr show ens18
@@ -496,9 +500,9 @@ echo "control-vm3" > /etc/hostname
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
-192.168.100.30 control-vm3
-192.168.100.20 proxy-vm1
-192.168.100.22 web-vm2
+192.168.100.40 control-vm3
+192.168.100.41 proxy-vm1
+192.168.100.42 web-vm2
 192.168.100.2  pve
 192.168.100.10 laptop
 EOF
@@ -507,8 +511,8 @@ EOF
 dnf install -y tar curl openssl wget
 
 # 5. Verify you can reach both managed nodes:
-ping -c 2 192.168.100.20   # should reach proxy-vm1
-ping -c 2 192.168.100.22   # should reach web-vm2
+ping -c 2 192.168.100.41   # should reach proxy-vm1
+ping -c 2 192.168.100.42   # should reach web-vm2
 
 echo "✅ control-vm3 ready as Ansible Control Node!"
 ```
@@ -520,19 +524,19 @@ After all three VMs are installed, run these quick tests from your **management 
 
 ```bash
 # Verify all 3 Phase 3 VMs are up and reachable over SSH:
-ssh root@192.168.100.20 "hostname && ip addr show ens18 | grep 'inet '"
-ssh root@192.168.100.22 "hostname && ip addr show ens18 | grep 'inet '"
-ssh root@192.168.100.30 "hostname && ip addr show ens18 | grep 'inet '"
+ssh root@192.168.100.41 "hostname && ip addr show ens18 | grep 'inet '"
+ssh root@192.168.100.42 "hostname && ip addr show ens18 | grep 'inet '"
+ssh root@192.168.100.40 "hostname && ip addr show ens18 | grep 'inet '"
 ```
 
 Expected output:
 ```text
 proxy-vm1
-    inet 192.168.100.20/24 ...
+    inet 192.168.100.41/24 ...
 web-vm2
-    inet 192.168.100.22/24 ...
+    inet 192.168.100.42/24 ...
 control-vm3
-    inet 192.168.100.30/24 ...
+    inet 192.168.100.40/24 ...
 ```
 
 > [!tip] If your network adapter shows up as `eth0` or `enp6s18` instead of `ens18`, just substitute that name in the `nmcli` commands. Run `ip link` to find the correct interface name.
@@ -541,21 +545,12 @@ control-vm3
 
 ## 5 · Step 3: Setting Up the Ansible Control Plane on VM3 (`control-vm3`)
 
-From this point forward, **all automation operations are executed directly on `control-vm3` (`192.168.100.30`)**. Log into it via SSH from your laptop:
+From this point forward, **all automation operations are executed directly on `control-vm3` (`192.168.100.40`)**. Log into it via SSH from your laptop:
 ```bash
-ssh root@192.168.100.30
+ssh root@192.168.100.40
 ```
 
-
-
-
----
-
-## 5 · Step 3: Setting Up the Ansible Control Plane on VM3 (`control-vm3`)
-
-From this point forward, **all automation operations are executed directly on `control-vm3` (`192.168.100.30`)**.
-
-### 4.1 Install Ansible Core and Dependencies
+### 5.1 Install Ansible Core and Dependencies
 Log into `control-vm3` as `root` (or regular user with sudo):
 
 ```bash
@@ -584,18 +579,18 @@ Ansible is completely **agentless**: it uses OpenSSH to push and execute ephemer
 ssh-keygen -t ed25519 -C "ansible-control-vm3" -f ~/.ssh/id_ed25519 -N ""
 
 # 2. Copy the public key to proxy-vm1 (VM1):
-ssh-copy-id -i ~/.ssh/id_ed25519.pub root@192.168.100.20
+ssh-copy-id -i ~/.ssh/id_ed25519.pub root@192.168.100.41
 
 # 3. Copy the public key to web-vm2 (VM2):
-ssh-copy-id -i ~/.ssh/id_ed25519.pub root@192.168.100.22
+ssh-copy-id -i ~/.ssh/id_ed25519.pub root@192.168.100.42
 
 # 4. Authorize the key locally on control-vm3 (VM3) for client tasks:
 cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 
 # 5. Test passwordless SSH connectivity across all nodes:
-ssh -o BatchMode=yes root@192.168.100.20 "echo '[OK] proxy-vm1 SSH connection verified'"
-ssh -o BatchMode=yes root@192.168.100.22 "echo '[OK] web-vm2 SSH connection verified'"
+ssh -o BatchMode=yes root@192.168.100.41 "echo '[OK] proxy-vm1 SSH connection verified'"
+ssh -o BatchMode=yes root@192.168.100.42 "echo '[OK] web-vm2 SSH connection verified'"
 ssh -o BatchMode=yes root@127.0.0.1 "echo '[OK] localhost SSH connection verified'"
 ```
 
@@ -671,10 +666,10 @@ Create `~/ansible-platform/inventory/hosts.ini`:
 # Defines host aliases, IPs, connection parameters, and tier groups
 
 [proxy]
-proxy-vm1 ansible_host=192.168.100.20 ansible_user=root
+proxy-vm1 ansible_host=192.168.100.41 ansible_user=root
 
 [webservers]
-web-vm2   ansible_host=192.168.100.22 ansible_user=root
+web-vm2   ansible_host=192.168.100.42 ansible_user=root
 
 [clients]
 # control-vm3 acts as the verification client host:
@@ -717,7 +712,7 @@ pki_city: "Pasay"
 # Applied specifically to [proxy] hosts:
 nginx_package_name: "nginx"
 nginx_service_name: "nginx"
-backend_server_ip: "192.168.100.22"
+backend_server_ip: "192.168.100.42"
 
 ssl_cert_dir: "/etc/pki/nginx"
 ssl_cert_file: "{{ ssl_cert_dir }}/server.crt"
@@ -923,7 +918,7 @@ nginx_package: "{{ nginx_package_name | default('nginx') }}"
 nginx_service: "{{ nginx_service_name | default('nginx') }}"
 fqdn: "{{ domain_name | default('labapp.com') }}"
 proxy_port: "{{ proxy_http_port | default(80) }}"
-upstream_host: "{{ backend_server_ip | default('192.168.100.22') }}"
+upstream_host: "{{ backend_server_ip | default('192.168.100.42') }}"
 upstream_port: "{{ backend_port | default(80) }}"
 ```
 
@@ -1095,7 +1090,7 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = {{ server_cert_fqdn }}
 DNS.2 = *.{{ server_cert_fqdn }}
-IP.1 = {{ hostvars['proxy-vm1']['ansible_host'] | default('192.168.100.20') }}
+IP.1 = {{ hostvars['proxy-vm1']['ansible_host'] | default('192.168.100.41') }}
 IP.2 = 127.0.0.1
 ```
 
@@ -1241,7 +1236,7 @@ IP.2 = 127.0.0.1
   ansible.builtin.assert:
     that:
       - "'DNS:labapp.com' in cert_inspection.stdout"
-      - "'IP Address:192.168.100.20' in cert_inspection.stdout"
+      - "'IP Address:192.168.100.41' in cert_inspection.stdout"
     fail_msg: "SECURITY FAILURE: Server certificate missing required SAN extensions!"
     success_msg: "VERIFIED: Server certificate SAN correctly matches FQDN and IP."
   tags: [verification]
@@ -1337,7 +1332,7 @@ In `roles/nginx_proxy/tasks/main.yml`, add firewalld port 443:
 # ~/ansible-platform/roles/client_zone/defaults/main.yml
 ---
 client_fqdn: "{{ domain_name | default('labapp.com') }}"
-client_proxy_target_ip: "{{ hostvars['proxy-vm1']['ansible_host'] | default('192.168.100.20') }}"
+client_proxy_target_ip: "{{ hostvars['proxy-vm1']['ansible_host'] | default('192.168.100.41') }}"
 pki_root_ca_source: "{{ playbook_dir }}/pki_artifacts/root-ca.crt"
 system_ca_anchors_dir: "/etc/pki/ca-trust/source/anchors"
 installed_ca_name: "airnav-das-root-ca.crt"
@@ -1521,7 +1516,7 @@ Demonstrate how Ansible automatically corrects unauthorized modifications:
 
 ```bash
 # 1. Manually tamper with the webpage on web-vm2:
-ssh root@192.168.100.22 "echo '<h1>UNAUTHORIZED DRIFT / TAMPERED FILE</h1>' > /var/www/html/index.html"
+ssh root@192.168.100.42 "echo '<h1>UNAUTHORIZED DRIFT / TAMPERED FILE</h1>' > /var/www/html/index.html"
 
 # 2. View drift detection using Ansible diff mode:
 ansible-playbook site.yml --check --diff
@@ -1555,7 +1550,7 @@ ansible-playbook site.yml
 8. **Q: How does `curl` on VM3 validate the certificate without `--insecure` (`-k`)?**
    - *A:* We copied `root-ca.crt` into `/etc/pki/ca-trust/source/anchors/` and ran `update-ca-trust extract`. This merged our internal CA into the system-wide certificate bundle (`ca-bundle.crt`), establishing native operating system trust.
 9. **Q: What is the purpose of modern Subject Alternative Names (SANs)?**
-   - *A:* RFC 5280 and modern CA/Browser Forum rules deprecate relying on the Common Name (CN). Modern TLS clients (like curl and Chrome) require matching SAN entries (`DNS:labapp.com`, `IP:192.168.100.20`) to prevent domain impersonation.
+   - *A:* RFC 5280 and modern CA/Browser Forum rules deprecate relying on the Common Name (CN). Modern TLS clients (like curl and Chrome) require matching SAN entries (`DNS:labapp.com`, `IP:192.168.100.41`) to prevent domain impersonation.
 10. **Q: How do you secure credentials and sensitive keys in enterprise Ansible?**
     - *A:* Using **Ansible Vault** (`ansible-vault`), which provides AES-256 encryption for variable files or playbooks, allowing safe storage in Git repositories.
 
@@ -1589,15 +1584,15 @@ During your technical evaluation with the engineering team, demonstrate the foll
 
 ### Completion Review Sign-Off Matrix
 
-| Review Area | Completion Evidence Required | Verification Method | Status |
-|---|---|---|:---:|
-| **Ansible Foundation** | Learning summary and automation blueprint | Present blueprint diagram and role hierarchy | ⬜ Pending |
-| **Project Structure** | Inventory, variables, master playbook, and README | Review `ansible.cfg`, `hosts.ini`, `site.yml` | ⬜ Pending |
-| **Apache Automation** | Working webpage and backend verification | `curl http://192.168.100.22` returns dynamic HTML | ⬜ Pending |
-| **NGINX Automation** | Working reverse proxy and managed configuration | `curl http://192.168.100.20` proxies to Apache | ⬜ Pending |
-| **Internal PKI Automation** | Root CA and server certificate created & verified | `openssl verify -CAfile root-ca.crt server.crt` | ⬜ Pending |
-| **Client Configuration** | FQDN mapping and Root CA available on client | `getent hosts labapp.com` & `trust list` | ⬜ Pending |
-| **End-to-End Verification** | Trusted HTTPS access to the expected webpage | `curl -Iv https://labapp.com` (200 OK, TLS verify OK) | ⬜ Pending |
-| **Repeatability** | Second run (`changed=0`) and drift correction | Run 2 recap comparison & `--diff` drift recovery | ⬜ Pending |
-| **Final Demonstration** | Automated launch and technical explanation | Live defense interview with Sir Jayrose | ⬜ Pending |
+| Review Area                 | Completion Evidence Required                      | Verification Method                                   |  Status   |
+| --------------------------- | ------------------------------------------------- | ----------------------------------------------------- | :-------: |
+| **Ansible Foundation**      | Learning summary and automation blueprint         | Present blueprint diagram and role hierarchy          | ⬜ Pending |
+| **Project Structure**       | Inventory, variables, master playbook, and README | Review `ansible.cfg`, `hosts.ini`, `site.yml`         | ⬜ Pending |
+| **Apache Automation**       | Working webpage and backend verification          | `curl http://192.168.100.42` returns dynamic HTML     | ⬜ Pending |
+| **NGINX Automation**        | Working reverse proxy and managed configuration   | `curl http://192.168.100.41` proxies to Apache        | ⬜ Pending |
+| **Internal PKI Automation** | Root CA and server certificate created & verified | `openssl verify -CAfile root-ca.crt server.crt`       | ⬜ Pending |
+| **Client Configuration**    | FQDN mapping and Root CA available on client      | `getent hosts labapp.com` & `trust list`              | ⬜ Pending |
+| **End-to-End Verification** | Trusted HTTPS access to the expected webpage      | `curl -Iv https://labapp.com` (200 OK, TLS verify OK) | ⬜ Pending |
+| **Repeatability**           | Second run (`changed=0`) and drift correction     | Run 2 recap comparison & `--diff` drift recovery      | ⬜ Pending |
+| **Final Demonstration**     | Automated launch and technical explanation        | Live defense interview with Sir Jayrose               | ⬜ Pending |
 
