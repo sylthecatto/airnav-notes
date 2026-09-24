@@ -302,24 +302,78 @@ qm start 106
 
 ---
 
-## 4 · Step 2: Configuring Network & Host Identities on the 3 VMs
+## 4 · Step 2: Installing AlmaLinux 9 on Each VM (One at a Time)
 
-Log into each VM's console or SSH session to configure standard hostnames and static IPs:
+> [!caution] Important Installation Order
+> Install and configure one VM completely before starting the next to avoid noVNC console confusion and minimize load on the Proxmox host.
+> **Order**: `proxy-vm1` (VM 104) → `web-vm2` (VM 105) → `control-vm3` (VM 106)
 
-### On VM3: `control-vm3` (`192.168.100.30`)
+---
+
+### 4.0 Common AlmaLinux 9 Installer Walkthrough (Same Steps for All 3 VMs)
+
+Open **Proxmox Web GUI** at `https://192.168.100.2:8006`, click the VM in the left sidebar, and click **Console (noVNC)**. Click **Start** (▶) to power on the selected VM. The AlmaLinux 9 text/graphical installer will appear.
+
+Step-by-step through the Anaconda installer:
+
+1. **Welcome Screen**: Select **English (English)** → **Continue**.
+2. **Installation Summary** (the hub page — complete all items with a warning icon):
+   * **Keyboard**: English (US) — Leave as-is.
+   * **Time & Date**: Set to your timezone (e.g., **Asia / Manila**).
+   * **Installation Destination**: Click it → Select the virtual disk (`sda` / 15 GB or 20 GB) → **Automatic partitioning** → **Done**.
+   * **Network & Host Name**: See the per-VM tables below for the exact values.
+   * **Root Password**: Set a strong root password. Write it down.
+   * **Software Selection**: Keep as **Minimal Install** (no GUI needed — this is a server).
+3. Click **Begin Installation** and wait (~3-5 minutes).
+4. When complete: Click **Reboot System**.
+5. After reboot, the VM will try to boot from the ISO again. Open the **Proxmox Console**, press any key to interrupt GRUB/boot menu and ensure it boots from disk OR eject the ISO:
+   ```bash
+   # Run on Proxmox host to eject the ISO from each VM after installation:
+   ssh root@192.168.100.2 "qm set 104 --ide2 none; qm set 104 --boot order=sata0"
+   ssh root@192.168.100.2 "qm set 105 --ide2 none; qm set 105 --boot order=sata0"
+   ssh root@192.168.100.2 "qm set 106 --ide2 none; qm set 106 --boot order=sata0"
+   ```
+
+---
+
+### 4.1 VM 104 (`proxy-vm1`) — NGINX Reverse Proxy Gateway
+
+> [!info] VM 104: Identity Card
+> | Parameter | Value |
+> |---|---|
+> | **VM Name** | `proxy-vm1` |
+> | **VMID** | `104` |
+> | **Role** | NGINX Reverse Proxy (Gateway) |
+> | **Disk** | 15 GB |
+> | **RAM** | 1280 MB |
+
+#### Step A: OS Installer — Network & Hostname Screen
+Inside the installer under **Network & Host Name**:
+1. Toggle the network adapter **ON** (slide the Ethernet button to ON).
+2. Click **Configure** → **IPv4 Settings**:
+   - **Method**: `Manual`
+   - **Address**: `192.168.100.20`
+   - **Netmask**: `255.255.255.0` (or `/24`)
+   - **Gateway**: `192.168.100.1`
+   - **DNS Servers**: `192.168.100.1,8.8.8.8`
+3. Set **Hostname** at the bottom: `proxy-vm1`
+4. Click **Apply** → **Done**.
+
+#### Step B: Post-Install Network & Hosts Configuration (SSH from your laptop)
+After AlmaLinux boots, SSH in from your laptop and finalize setup:
+
 ```bash
-# 1. Set hostname:
-hostnamectl set-hostname control-vm3
+# SSH in from your management laptop:
+ssh root@192.168.100.20
 
-# 2. Configure static IP address on primary network interface (ens18):
-nmcli con mod ens18 ipv4.addresses 192.168.100.30/24
-nmcli con mod ens18 ipv4.gateway 192.168.100.1
-nmcli con mod ens18 ipv4.dns "192.168.100.1,8.8.8.8"
-nmcli con mod ens18 ipv4.method manual
-nmcli con mod ens18 connection.autoconnect yes
-nmcli con up ens18
+# 1. Verify static IP is correct:
+ip addr show ens18
 
-# 3. Populate /etc/hosts for easy internal resolution:
+# 2. Set the hostname definitively:
+hostnamectl set-hostname proxy-vm1
+echo "proxy-vm1" > /etc/hostname
+
+# 3. Write /etc/hosts with all 3 Phase 3 nodes:
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
@@ -329,63 +383,167 @@ cat << 'EOF' > /etc/hosts
 192.168.100.2  pve
 192.168.100.10 laptop
 EOF
+
+# 4. Install essential tools:
+dnf install -y tar curl openssl wget
+
+# 5. Verify connectivity:
+ping -c 2 192.168.100.1
+curl -sI https://example.com | head -n 1
+
+echo "✅ proxy-vm1 ready!"
 ```
 
-### On VM1: `proxy-vm1` (`192.168.100.20`)
+---
+
+### 4.2 VM 105 (`web-vm2`) — Backend Apache Web Server
+
+> [!info] VM 105: Identity Card
+> | Parameter | Value |
+> |---|---|
+> | **VM Name** | `web-vm2` |
+> | **VMID** | `105` |
+> | **Role** | Apache HTTP Backend (Port 80) |
+> | **Disk** | 15 GB |
+> | **RAM** | 1280 MB |
+
+#### Step A: OS Installer — Network & Hostname Screen
+Inside the installer under **Network & Host Name**:
+1. Toggle the network adapter **ON**.
+2. Click **Configure** → **IPv4 Settings**:
+   - **Method**: `Manual`
+   - **Address**: `192.168.100.22`
+   - **Netmask**: `255.255.255.0` (or `/24`)
+   - **Gateway**: `192.168.100.1`
+   - **DNS Servers**: `192.168.100.1,8.8.8.8`
+3. Set **Hostname** at the bottom: `web-vm2`
+4. Click **Apply** → **Done**.
+
+#### Step B: Post-Install Network & Hosts Configuration
 ```bash
-# 1. Set hostname:
-hostnamectl set-hostname proxy-vm1
+# SSH in from your management laptop:
+ssh root@192.168.100.22
 
-# 2. Configure static IP on ens18:
-nmcli con mod ens18 ipv4.addresses 192.168.100.20/24
-nmcli con mod ens18 ipv4.gateway 192.168.100.1
-nmcli con mod ens18 ipv4.dns "192.168.100.1,8.8.8.8"
-nmcli con mod ens18 ipv4.method manual
-nmcli con mod ens18 connection.autoconnect yes
-nmcli con up ens18
+# 1. Verify static IP is correct:
+ip addr show ens18
 
-# 3. Clean up any leftover manual Keepalived or VIP bindings:
-systemctl stop keepalived 2>/dev/null || true
-systemctl disable keepalived 2>/dev/null || true
-systemctl stop nginx 2>/dev/null || true
-
-# 4. Populate /etc/hosts:
-cat << 'EOF' > /etc/hosts
-127.0.0.1   localhost localhost.localdomain
-::1         localhost localhost.localdomain
-192.168.100.30 control-vm3
-192.168.100.20 proxy-vm1
-192.168.100.22 web-vm2
-EOF
-```
-
-### On VM2: `web-vm2` (`192.168.100.22`)
-```bash
-# 1. Set hostname:
+# 2. Set the hostname definitively:
 hostnamectl set-hostname web-vm2
+echo "web-vm2" > /etc/hostname
 
-# 2. Configure static IP on ens18:
-nmcli con mod ens18 ipv4.addresses 192.168.100.22/24
-nmcli con mod ens18 ipv4.gateway 192.168.100.1
-nmcli con mod ens18 ipv4.dns "192.168.100.1,8.8.8.8"
-nmcli con mod ens18 ipv4.method manual
-nmcli con mod ens18 connection.autoconnect yes
-nmcli con up ens18
-
-# 3. Clean up any old Apache or backend services:
-systemctl stop httpd 2>/dev/null || true
-systemctl disable httpd 2>/dev/null || true
-rm -rf /var/www/html/*
-
-# 4. Populate /etc/hosts:
+# 3. Write /etc/hosts with all 3 Phase 3 nodes:
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
 192.168.100.30 control-vm3
 192.168.100.20 proxy-vm1
 192.168.100.22 web-vm2
+192.168.100.2  pve
+192.168.100.10 laptop
 EOF
+
+# 4. Install essential tools:
+dnf install -y tar curl openssl wget
+
+# 5. Verify connectivity:
+ping -c 2 192.168.100.20
+
+echo "✅ web-vm2 ready!"
 ```
+
+---
+
+### 4.3 VM 106 (`control-vm3`) — Ansible Control Node & Verification Client
+
+> [!info] VM 106: Identity Card
+> | Parameter | Value |
+> |---|---|
+> | **VM Name** | `control-vm3` |
+> | **VMID** | `106` |
+> | **Role** | Ansible Control Node + Root CA Authority + Verification Client |
+> | **Disk** | 20 GB |
+> | **RAM** | 1280 MB |
+
+#### Step A: OS Installer — Network & Hostname Screen
+Inside the installer under **Network & Host Name**:
+1. Toggle the network adapter **ON**.
+2. Click **Configure** → **IPv4 Settings**:
+   - **Method**: `Manual`
+   - **Address**: `192.168.100.30`
+   - **Netmask**: `255.255.255.0` (or `/24`)
+   - **Gateway**: `192.168.100.1`
+   - **DNS Servers**: `192.168.100.1,8.8.8.8`
+3. Set **Hostname** at the bottom: `control-vm3`
+4. Click **Apply** → **Done**.
+
+#### Step B: Post-Install Network & Hosts Configuration
+```bash
+# SSH in from your management laptop:
+ssh root@192.168.100.30
+
+# 1. Verify static IP is correct:
+ip addr show ens18
+
+# 2. Set the hostname definitively:
+hostnamectl set-hostname control-vm3
+echo "control-vm3" > /etc/hostname
+
+# 3. Write /etc/hosts with all 3 Phase 3 nodes:
+cat << 'EOF' > /etc/hosts
+127.0.0.1   localhost localhost.localdomain
+::1         localhost localhost.localdomain
+192.168.100.30 control-vm3
+192.168.100.20 proxy-vm1
+192.168.100.22 web-vm2
+192.168.100.2  pve
+192.168.100.10 laptop
+EOF
+
+# 4. Install essential tools:
+dnf install -y tar curl openssl wget
+
+# 5. Verify you can reach both managed nodes:
+ping -c 2 192.168.100.20   # should reach proxy-vm1
+ping -c 2 192.168.100.22   # should reach web-vm2
+
+echo "✅ control-vm3 ready as Ansible Control Node!"
+```
+
+---
+
+### 4.4 Network Validation Checkpoint
+After all three VMs are installed, run these quick tests from your **management laptop** to confirm connectivity:
+
+```bash
+# Verify all 3 Phase 3 VMs are up and reachable over SSH:
+ssh root@192.168.100.20 "hostname && ip addr show ens18 | grep 'inet '"
+ssh root@192.168.100.22 "hostname && ip addr show ens18 | grep 'inet '"
+ssh root@192.168.100.30 "hostname && ip addr show ens18 | grep 'inet '"
+```
+
+Expected output:
+```text
+proxy-vm1
+    inet 192.168.100.20/24 ...
+web-vm2
+    inet 192.168.100.22/24 ...
+control-vm3
+    inet 192.168.100.30/24 ...
+```
+
+> [!tip] If your network adapter shows up as `eth0` or `enp6s18` instead of `ens18`, just substitute that name in the `nmcli` commands. Run `ip link` to find the correct interface name.
+
+---
+
+## 5 · Step 3: Setting Up the Ansible Control Plane on VM3 (`control-vm3`)
+
+From this point forward, **all automation operations are executed directly on `control-vm3` (`192.168.100.30`)**. Log into it via SSH from your laptop:
+```bash
+ssh root@192.168.100.30
+```
+
+
+
 
 ---
 
