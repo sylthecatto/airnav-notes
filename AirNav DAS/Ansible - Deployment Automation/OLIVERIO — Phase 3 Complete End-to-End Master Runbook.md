@@ -20,9 +20,9 @@ updated: 2026-09-24
 > This master runbook is your definitive, step-by-step, hand-holding guide to completing **Phase 3: Deployment Automation (AIR-DAS Onboarding)**.
 > 
 > In this phase, we rebuild the System Discovery Platform using **Ansible** on a clean, dedicated 3-VM architecture hosted on Proxmox VE:
-> - **VM3 (`control01`)**: Dedicated Ansible Control Node & Verification Client.
-> - **VM1 (`proxy01`)**: NGINX Reverse Proxy Gateway with HTTPS TLS Termination.
-> - **VM2 (`web01`)**: Apache HTTP Server Backend serving a dynamic Jinja2 webpage.
+> - **VM3 (`control-vm3`)**: Dedicated Ansible Control Node & Verification Client.
+> - **VM1 (`proxy-vm1`)**: NGINX Reverse Proxy Gateway with HTTPS TLS Termination.
+> - **VM2 (`web-vm2`)**: Apache HTTP Server Backend serving a dynamic Jinja2 webpage.
 > 
 > This guide takes you from preserving your existing Phase 2 configs, resetting/re-provisioning the VMs on Proxmox VE, setting up the SSH control plane on VM3, building the project repository and roles, automating the internal PKI, and proving **idempotency** and **drift correction** with one single master playbook (`site.yml`).
 
@@ -41,15 +41,15 @@ updated: 2026-09-24
 flowchart TD
     subgraph Proxmox_Hypervisor["Proxmox VE Hypervisor Host (192.168.100.2)"]
         subgraph Control_Client_Tier["Client / Management Tier"]
-            VM3["VM3: control01 (VMID 103)\nIP: 192.168.100.30\n• Ansible Control Node\n• Internal PKI Root CA Authority\n• Verification Client (Trust Store & /etc/hosts)"]
+            VM3["VM3: control-vm3 (VMID 106)\nIP: 192.168.100.30\n• Ansible Control Node\n• Internal PKI Root CA Authority\n• Verification Client (Trust Store & /etc/hosts)"]
         end
 
         subgraph Reverse_Proxy_Tier["Gateway / Ingress Tier"]
-            VM1["VM1: proxy01 (VMID 102)\nLAN IP: 192.168.100.20\n• NGINX Reverse Proxy (HTTPS:443)\n• TLS Server Cert with SAN (labapp.com)\n• HTTP:80 -> HTTPS:443 301 Redirect"]
+            VM1["VM1: proxy-vm1 (VMID 104)\nLAN IP: 192.168.100.20\n• NGINX Reverse Proxy (HTTPS:443)\n• TLS Server Cert with SAN (labapp.com)\n• HTTP:80 -> HTTPS:443 301 Redirect"]
         end
 
         subgraph Backend_Web_Tier["Application Tier"]
-            VM2["VM2: web01 (VMID 101)\nLAN/Private IP: 192.168.100.22\n• Apache HTTP Server (httpd:80)\n• Dynamic Jinja2 Landing Page\n• Firewalld & SELinux Enforced"]
+            VM2["VM2: web-vm2 (VMID 105)\nLAN/Private IP: 192.168.100.22\n• Apache HTTP Server (httpd:80)\n• Dynamic Jinja2 Landing Page\n• Firewalld & SELinux Enforced"]
         end
     end
 
@@ -63,9 +63,13 @@ flowchart TD
 
 | Hostname | VMID | Role in Phase 3 | IP Address | Subnet / Gateway | vCPU / RAM / Disk |
 |---|:---:|---|---|---|:---:|
-| `control01` | **103** | Ansible Control Node & Client | `192.168.100.30/24` | GW: `192.168.100.1` | 2 vCPU / 2048 MB / 20 GB |
-| `proxy01` | **102** | NGINX Reverse Proxy Gateway | `192.168.100.20/24` | GW: `192.168.100.1` | 2 vCPU / 1536 MB / 15 GB |
-| `web01` | **101** | Backend Apache Web Server | `192.168.100.22/24` | GW: `192.168.100.1` | 2 vCPU / 1536 MB / 15 GB |
+| `control-vm3` | **106** | Ansible Control Node & Client | `192.168.100.30/24` | GW: `192.168.100.1` | 2 vCPU / 1280 MB / 20 GB |
+| `proxy-vm1` | **104** | NGINX Reverse Proxy Gateway | `192.168.100.20/24` | GW: `192.168.100.1` | 1 vCPU / 1280 MB / 15 GB |
+| `web-vm2` | **105** | Backend Apache Web Server | `192.168.100.22/24` | GW: `192.168.100.1` | 1 vCPU / 1280 MB / 15 GB |
+| *(Cold Backup)* `proxy-vm1` | 102 | Phase 2 Proxy (Preserved on Disk) | (Powered Off) | - | Preserved |
+| *(Cold Backup)* `proxy02` | 103 | Phase 2 HA Backup (Preserved on Disk) | (Powered Off) | - | Preserved |
+| *(Cold Backup)* `appvm` | 101 | Phase 2 App (Preserved on Disk) | (Powered Off) | - | Preserved |
+| *(Cold Backup)* `dbvm` | 100 | Phase 2 DB (Preserved on Disk) | (Powered Off) | - | Preserved |
 | `pve` | Host | Proxmox VE Hypervisor | `192.168.100.2/24` | GW: `192.168.100.1` | Physical Server |
 | `laptop` | Host | Management Laptop | `192.168.100.10/24` | GW: `192.168.100.1` | Local Machine |
 
@@ -93,7 +97,7 @@ graph TD
 
 #### 1. Inventory (`inventory/hosts.ini`)
 * **Purpose**: The single source of truth that defines *what machines exist* in the fleet and *how they are logically grouped*.
-* **Why it matters**: Hardcoding IP addresses inside playbooks violates the principle of separation of concerns. In our project, the inventory establishes three distinct tiers: `[proxy]` (`proxy01`), `[webservers]` (`web01`), and `[clients]` (`control01`), tied together under the parent group `[lab:children]`. This allows our automation to execute specific roles on specific tiers simultaneously.
+* **Why it matters**: Hardcoding IP addresses inside playbooks violates the principle of separation of concerns. In our project, the inventory establishes three distinct tiers: `[proxy]` (`proxy-vm1`), `[webservers]` (`web-vm2`), and `[clients]` (`control-vm3`), tied together under the parent group `[lab:children]`. This allows our automation to execute specific roles on specific tiers simultaneously.
 
 #### 2. Playbooks & Plays (`site.yml`)
 * **Purpose**: A **Playbook** is a YAML document containing one or more **Plays**. A **Play** maps a target inventory group to a specific set of roles and privileges (`become: true`).
@@ -163,10 +167,10 @@ In systems automation:
 
 ---
 
-### 2.1 Why the `scp: /tmp/proxy01-configs.tar.gz: No such file or directory` Error Happened
+### 2.1 Why the `scp: /tmp/proxy-vm1-configs.tar.gz: No such file or directory` Error Happened
 When you ran the multi-line SSH script, your terminal asked:
 `root@192.168.100.20's password:`
-Because passwordless SSH keys were not yet installed from your laptop to `proxy01` and `proxy02`, running multiple chained commands (`ssh` -> `scp` -> `ssh`) interrupted the input stream. The `scp` command fired before the remote `tar` command finished creating `/tmp/proxy01-configs.tar.gz`.
+Because passwordless SSH keys were not yet installed from your laptop to `proxy-vm1` and `proxy02`, running multiple chained commands (`ssh` -> `scp` -> `ssh`) interrupted the input stream. The `scp` command fired before the remote `tar` command finished creating `/tmp/proxy-vm1-configs.tar.gz`.
 
 ---
 
@@ -199,10 +203,10 @@ echo "✅ Complete Proxmox VM backups are now safely stored on your laptop in ~/
 
 ```bash
 # 1. Pull NGINX, Keepalived, and network configs directly:
-mkdir -p ~/phase2-preservation/proxy01/etc ~/phase2-preservation/proxy02/etc
-scp -r root@192.168.100.20:/etc/nginx ~/phase2-preservation/proxy01/etc/
-scp -r root@192.168.100.20:/etc/keepalived ~/phase2-preservation/proxy01/etc/
-scp root@192.168.100.20:/etc/hosts ~/phase2-preservation/proxy01/etc/hosts
+mkdir -p ~/phase2-preservation/proxy-vm1/etc ~/phase2-preservation/proxy02/etc
+scp -r root@192.168.100.20:/etc/nginx ~/phase2-preservation/proxy-vm1/etc/
+scp -r root@192.168.100.20:/etc/keepalived ~/phase2-preservation/proxy-vm1/etc/
+scp root@192.168.100.20:/etc/hosts ~/phase2-preservation/proxy-vm1/etc/hosts
 
 scp -r root@192.168.100.21:/etc/keepalived ~/phase2-preservation/proxy02/etc/
 scp root@192.168.100.21:/etc/hosts ~/phase2-preservation/proxy02/etc/hosts
@@ -224,19 +228,19 @@ You can now safely proceed to **Step 1: Decommissioning & Provisioning Clean VMs
 
 ---
 
-## 3 · Step 1: Decommissioning Old VMs & Provisioning the 3 Fresh VMs on Proxmox
+## 3 · Step 1: Preserving Old VMs & Provisioning the 3 Fresh VMs on Proxmox
 
-We will now prepare our 3 target virtual machines on the Proxmox VE host (`192.168.100.2`).
+> [!tip] Preserving Phase 2 VMs as Cold Backups
+> Rather than deleting or modifying your existing Phase 2 VMs (VM 100, 101, 102, 103), we leave them **100% intact on disk** as cold standby backups.
+> 
+> **Important Hardware Check:** Your Proxmox host (`192.168.100.2`) has **3.7 GiB total physical RAM**. Because running 7 VMs simultaneously would exhaust memory and trigger the Linux Out-Of-Memory (OOM) killer, we simply **power off** the old VMs (`qm stop`) to release RAM, while keeping their disks and snapshots completely safe.
 
-### Option A: Clean Reset via Snapshots (Fastest & Safest)
-Since your existing VMs already have the `finishedHA-preAutomation` snapshot created on Proxmox, you can quickly roll them back to a clean state or reconfigure them.
-
-### Option B: Fresh VM Provisioning via Proxmox CLI (Recommended for Clean Room)
-Log into the Proxmox VE host (`ssh root@192.168.100.2`) to stop old VMs and provision fresh, clean machines:
+Log into the Proxmox VE host (`ssh root@192.168.100.2`) to stop old VMs and provision the three new clean VMs:
 
 ```bash
 # -------------------------------------------------------------
-# 1. Stop existing Phase 2 VMs safely on Proxmox VE:
+# 1. Stop existing Phase 2 VMs to free physical RAM:
+# (Their disks and snapshots remain 100% preserved on disk!)
 # -------------------------------------------------------------
 qm stop 100 2>/dev/null || true   # db
 qm stop 101 2>/dev/null || true   # app
@@ -244,19 +248,41 @@ qm stop 102 2>/dev/null || true   # proxy
 qm stop 103 2>/dev/null || true   # proxy02
 
 # -------------------------------------------------------------
-# 2. Decommission VM 100 (Database) and VM 103 (Proxy02):
-# (Not required in Phase 3 per Sir Jayrose's scope boundary)
-# If you wish to preserve their disk images, do not destroy them;
-# simply keep them powered off.
+# 2. Create VM 104: proxy-vm1 (NGINX Reverse Proxy Gateway)
 # -------------------------------------------------------------
+qm create 104 \
+  --name proxy-vm1 \
+  --memory 1280 \
+  --cores 1 \
+  --cpu x86-64-v2-AES \
+  --net0 virtio,bridge=vmbr0,firewall=1 \
+  --scsihw virtio-scsi-single \
+  --sata0 local-lvm:15 \
+  --boot order=sata0;ide2;net0 \
+  --ide2 local:iso/AlmaLinux-9-latest-x86_64-minimal.iso,media=cdrom \
+  --ostype l26
 
 # -------------------------------------------------------------
-# 3. Create VM 103: control01 (Ansible Control Node & Client VM)
+# 3. Create VM 105: web-vm2 (Backend Apache Web Server)
 # -------------------------------------------------------------
-# Creates a new VM with 2 vCPUs, 2048MB RAM, attached to vmbr0 (LAN):
-qm create 103 \
-  --name control01 \
-  --memory 2048 \
+qm create 105 \
+  --name web-vm2 \
+  --memory 1280 \
+  --cores 1 \
+  --cpu x86-64-v2-AES \
+  --net0 virtio,bridge=vmbr0,firewall=1 \
+  --scsihw virtio-scsi-single \
+  --sata0 local-lvm:15 \
+  --boot order=sata0;ide2;net0 \
+  --ide2 local:iso/AlmaLinux-9-latest-x86_64-minimal.iso,media=cdrom \
+  --ostype l26
+
+# -------------------------------------------------------------
+# 4. Create VM 106: control-vm3 (Ansible Control Node & Client)
+# -------------------------------------------------------------
+qm create 106 \
+  --name control-vm3 \
+  --memory 1280 \
   --cores 2 \
   --cpu x86-64-v2-AES \
   --net0 virtio,bridge=vmbr0,firewall=1 \
@@ -266,8 +292,12 @@ qm create 103 \
   --ide2 local:iso/AlmaLinux-9-latest-x86_64-minimal.iso,media=cdrom \
   --ostype l26
 
-# Start VM 103 and install AlmaLinux 9 minimal (or clone from clean template):
-qm start 103
+# -------------------------------------------------------------
+# 5. Start the three new Phase 3 VMs:
+# -------------------------------------------------------------
+qm start 104
+qm start 105
+qm start 106
 ```
 
 ---
@@ -276,10 +306,10 @@ qm start 103
 
 Log into each VM's console or SSH session to configure standard hostnames and static IPs:
 
-### On VM3: `control01` (`192.168.100.30`)
+### On VM3: `control-vm3` (`192.168.100.30`)
 ```bash
 # 1. Set hostname:
-hostnamectl set-hostname control01
+hostnamectl set-hostname control-vm3
 
 # 2. Configure static IP address on primary network interface (ens18):
 nmcli con mod ens18 ipv4.addresses 192.168.100.30/24
@@ -293,18 +323,18 @@ nmcli con up ens18
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
-192.168.100.30 control01
-192.168.100.20 proxy01
-192.168.100.22 web01
+192.168.100.30 control-vm3
+192.168.100.20 proxy-vm1
+192.168.100.22 web-vm2
 192.168.100.2  pve
 192.168.100.10 laptop
 EOF
 ```
 
-### On VM1: `proxy01` (`192.168.100.20`)
+### On VM1: `proxy-vm1` (`192.168.100.20`)
 ```bash
 # 1. Set hostname:
-hostnamectl set-hostname proxy01
+hostnamectl set-hostname proxy-vm1
 
 # 2. Configure static IP on ens18:
 nmcli con mod ens18 ipv4.addresses 192.168.100.20/24
@@ -323,16 +353,16 @@ systemctl stop nginx 2>/dev/null || true
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
-192.168.100.30 control01
-192.168.100.20 proxy01
-192.168.100.22 web01
+192.168.100.30 control-vm3
+192.168.100.20 proxy-vm1
+192.168.100.22 web-vm2
 EOF
 ```
 
-### On VM2: `web01` (`192.168.100.22`)
+### On VM2: `web-vm2` (`192.168.100.22`)
 ```bash
 # 1. Set hostname:
-hostnamectl set-hostname web01
+hostnamectl set-hostname web-vm2
 
 # 2. Configure static IP on ens18:
 nmcli con mod ens18 ipv4.addresses 192.168.100.22/24
@@ -351,20 +381,20 @@ rm -rf /var/www/html/*
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
-192.168.100.30 control01
-192.168.100.20 proxy01
-192.168.100.22 web01
+192.168.100.30 control-vm3
+192.168.100.20 proxy-vm1
+192.168.100.22 web-vm2
 EOF
 ```
 
 ---
 
-## 5 · Step 3: Setting Up the Ansible Control Plane on VM3 (`control01`)
+## 5 · Step 3: Setting Up the Ansible Control Plane on VM3 (`control-vm3`)
 
-From this point forward, **all automation operations are executed directly on `control01` (`192.168.100.30`)**.
+From this point forward, **all automation operations are executed directly on `control-vm3` (`192.168.100.30`)**.
 
 ### 4.1 Install Ansible Core and Dependencies
-Log into `control01` as `root` (or regular user with sudo):
+Log into `control-vm3` as `root` (or regular user with sudo):
 
 ```bash
 # 1. Update system package repository metadata:
@@ -387,23 +417,23 @@ ansible --version
 Ansible is completely **agentless**: it uses OpenSSH to push and execute ephemeral Python modules.
 
 ```bash
-# 1. Generate an Ed25519 keypair on control01:
+# 1. Generate an Ed25519 keypair on control-vm3:
 # (-N "" ensures passwordless authentication for uninterrupted automation)
-ssh-keygen -t ed25519 -C "ansible-control01" -f ~/.ssh/id_ed25519 -N ""
+ssh-keygen -t ed25519 -C "ansible-control-vm3" -f ~/.ssh/id_ed25519 -N ""
 
-# 2. Copy the public key to proxy01 (VM1):
+# 2. Copy the public key to proxy-vm1 (VM1):
 ssh-copy-id -i ~/.ssh/id_ed25519.pub root@192.168.100.20
 
-# 3. Copy the public key to web01 (VM2):
+# 3. Copy the public key to web-vm2 (VM2):
 ssh-copy-id -i ~/.ssh/id_ed25519.pub root@192.168.100.22
 
-# 4. Authorize the key locally on control01 (VM3) for client tasks:
+# 4. Authorize the key locally on control-vm3 (VM3) for client tasks:
 cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 
 # 5. Test passwordless SSH connectivity across all nodes:
-ssh -o BatchMode=yes root@192.168.100.20 "echo '[OK] proxy01 SSH connection verified'"
-ssh -o BatchMode=yes root@192.168.100.22 "echo '[OK] web01 SSH connection verified'"
+ssh -o BatchMode=yes root@192.168.100.20 "echo '[OK] proxy-vm1 SSH connection verified'"
+ssh -o BatchMode=yes root@192.168.100.22 "echo '[OK] web-vm2 SSH connection verified'"
 ssh -o BatchMode=yes root@127.0.0.1 "echo '[OK] localhost SSH connection verified'"
 ```
 
@@ -411,7 +441,7 @@ ssh -o BatchMode=yes root@127.0.0.1 "echo '[OK] localhost SSH connection verifie
 
 ## 6 · Step 4: Milestone 1 — Project Hangar Scaffold
 
-Now, create the clean, enterprise-grade Ansible repository structure on `control01`.
+Now, create the clean, enterprise-grade Ansible repository structure on `control-vm3`.
 
 ```bash
 # 1. Create project root directory:
@@ -479,14 +509,14 @@ Create `~/ansible-platform/inventory/hosts.ini`:
 # Defines host aliases, IPs, connection parameters, and tier groups
 
 [proxy]
-proxy01 ansible_host=192.168.100.20 ansible_user=root
+proxy-vm1 ansible_host=192.168.100.20 ansible_user=root
 
 [webservers]
-web01   ansible_host=192.168.100.22 ansible_user=root
+web-vm2   ansible_host=192.168.100.22 ansible_user=root
 
 [clients]
-# control01 acts as the verification client host:
-control01 ansible_host=127.0.0.1 ansible_connection=local
+# control-vm3 acts as the verification client host:
+control-vm3 ansible_host=127.0.0.1 ansible_connection=local
 
 # Umbrella group containing all lab nodes:
 [lab:children]
@@ -547,7 +577,7 @@ webpage_title: "AirNav DAS - System Discovery Platform"
 ---
 
 ### 5.4 Validating Milestone 1 Connectivity
-Execute these validation commands on `control01`:
+Execute these validation commands on `control-vm3`:
 
 ```bash
 cd ~/ansible-platform
@@ -558,18 +588,18 @@ ansible-inventory --graph
 # @all:
 #   |--@lab:
 #   |  |--@clients:
-#   |  |  |--control01
+#   |  |  |--control-vm3
 #   |  |--@proxy:
-#   |  |  |--proxy01
+#   |  |  |--proxy-vm1
 #   |  |--@webservers:
-#   |  |  |--web01
+#   |  |  |--web-vm2
 
 # 2. Run Ansible ping across all nodes:
 ansible all -m ping
 # Expected:
-# proxy01   | SUCCESS => {"changed": false, "ping": "pong"}
-# web01     | SUCCESS => {"changed": false, "ping": "pong"}
-# control01 | SUCCESS => {"changed": false, "ping": "pong"}
+# proxy-vm1   | SUCCESS => {"changed": false, "ping": "pong"}
+# web-vm2     | SUCCESS => {"changed": false, "ping": "pong"}
+# control-vm3 | SUCCESS => {"changed": false, "ping": "pong"}
 ```
 
 ---
@@ -703,7 +733,7 @@ Listen {{ apache_port }}
 
 - name: Display backend verification evidence
   ansible.builtin.debug:
-    msg: "SUCCESS: Apache backend verified locally on web01 port {{ apache_port }}. Status: {{ local_http_check.status }}"
+    msg: "SUCCESS: Apache backend verified locally on web-vm2 port {{ apache_port }}. Status: {{ local_http_check.status }}"
   tags: [verification]
 ```
 
@@ -866,7 +896,7 @@ server {
 
 ## 9 · Step 7: Milestone 4 — Trust (Automated Internal PKI & HTTPS)
 
-In this milestone, `control01` acts as the Certificate Authority (CA). The Root CA private key is kept strictly isolated on `control01`.
+In this milestone, `control-vm3` acts as the Certificate Authority (CA). The Root CA private key is kept strictly isolated on `control-vm3`.
 
 ### 8.1 Role Defaults (`roles/pki_trust/defaults/main.yml`)
 ```yaml
@@ -903,7 +933,7 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = {{ server_cert_fqdn }}
 DNS.2 = *.{{ server_cert_fqdn }}
-IP.1 = {{ hostvars['proxy01']['ansible_host'] | default('192.168.100.20') }}
+IP.1 = {{ hostvars['proxy-vm1']['ansible_host'] | default('192.168.100.20') }}
 IP.2 = 127.0.0.1
 ```
 
@@ -914,7 +944,7 @@ IP.2 = 127.0.0.1
 # ~/ansible-platform/roles/pki_trust/tasks/main.yml
 ---
 # =========================================================================
-# 1. CONTROL NODE TASKS (CA Generation & Server Signing on control01)
+# 1. CONTROL NODE TASKS (CA Generation & Server Signing on control-vm3)
 # =========================================================================
 - name: Ensure local PKI artifact directory exists on Control Node
   ansible.builtin.file:
@@ -995,7 +1025,7 @@ IP.2 = 127.0.0.1
   tags: [pki, server_cert]
 
 # =========================================================================
-# 2. TARGET PROXY NODE TASKS (Deploy to proxy01 with Hardened Permissions)
+# 2. TARGET PROXY NODE TASKS (Deploy to proxy-vm1 with Hardened Permissions)
 # =========================================================================
 - name: Ensure target certificate directory exists on NGINX host
   ansible.builtin.file:
@@ -1145,7 +1175,7 @@ In `roles/nginx_proxy/tasks/main.yml`, add firewalld port 443:
 # ~/ansible-platform/roles/client_zone/defaults/main.yml
 ---
 client_fqdn: "{{ domain_name | default('labapp.com') }}"
-client_proxy_target_ip: "{{ hostvars['proxy01']['ansible_host'] | default('192.168.100.20') }}"
+client_proxy_target_ip: "{{ hostvars['proxy-vm1']['ansible_host'] | default('192.168.100.20') }}"
 pki_root_ca_source: "{{ playbook_dir }}/pki_artifacts/root-ca.crt"
 system_ca_anchors_dir: "/etc/pki/ca-trust/source/anchors"
 installed_ca_name: "airnav-das-root-ca.crt"
@@ -1289,7 +1319,7 @@ Create the master orchestration playbook `~/ansible-platform/site.yml`:
 ## 12 · Step 10: Running the Automation & Proving Idempotency
 
 ### Run 1: Initial Automated Launch
-Run the master playbook from `control01`:
+Run the master playbook from `control-vm3`:
 
 ```bash
 cd ~/ansible-platform
@@ -1299,9 +1329,9 @@ ansible-playbook site.yml
 > In this run, Ansible configures everything from zero. Observe that `changed > 0` across all hosts:
 > ```
 > PLAY RECAP **************************************************************************
-> control01  : ok=10   changed=4    unreachable=0    failed=0
-> proxy01    : ok=15   changed=9    unreachable=0    failed=0
-> web01      : ok=8    changed=6    unreachable=0    failed=0
+> control-vm3  : ok=10   changed=4    unreachable=0    failed=0
+> proxy-vm1    : ok=15   changed=9    unreachable=0    failed=0
+> web-vm2      : ok=8    changed=6    unreachable=0    failed=0
 > ```
 
 ---
@@ -1316,9 +1346,9 @@ ansible-playbook site.yml
 > Because the platform is already in the desired state, **Ansible reports `changed=0`**:
 > ```
 > PLAY RECAP **************************************************************************
-> control01  : ok=10   changed=0    unreachable=0    failed=0
-> proxy01    : ok=15   changed=0    unreachable=0    failed=0
-> web01      : ok=8    changed=0    unreachable=0    failed=0
+> control-vm3  : ok=10   changed=0    unreachable=0    failed=0
+> proxy-vm1    : ok=15   changed=0    unreachable=0    failed=0
+> web-vm2      : ok=8    changed=0    unreachable=0    failed=0
 > ```
 > Explain to the trainer: "This proves that our automation is fully idempotent. We can run this playbook repeatedly in production without causing service flapping or unexpected configuration changes."
 
@@ -1328,7 +1358,7 @@ ansible-playbook site.yml
 Demonstrate how Ansible automatically corrects unauthorized modifications:
 
 ```bash
-# 1. Manually tamper with the webpage on web01:
+# 1. Manually tamper with the webpage on web-vm2:
 ssh root@192.168.100.22 "echo '<h1>UNAUTHORIZED DRIFT / TAMPERED FILE</h1>' > /var/www/html/index.html"
 
 # 2. View drift detection using Ansible diff mode:
@@ -1338,7 +1368,7 @@ ansible-playbook site.yml --check --diff
 ansible-playbook site.yml
 ```
 > [!tip] Verification Evidence 3: Self-Healing Convergence
-> Notice that **only `web01` reports `changed=1`**, while all other nodes report `changed=0`. Ansible corrected the drift and restored the authorized landing page!
+> Notice that **only `web-vm2` reports `changed=1`**, while all other nodes report `changed=0`. Ansible corrected the drift and restored the authorized landing page!
 
 ---
 
@@ -1346,11 +1376,11 @@ ansible-playbook site.yml
 
 > [!abstract] Rehearse These Answers for Sir Jayrose and Senior Engineers
 
-1. **Q: Why create VM3 (`control01`) instead of using your personal laptop?**
+1. **Q: Why create VM3 (`control-vm3`) instead of using your personal laptop?**
    - *A:* Infrastructure segregation. Using a dedicated VM mimics production management bastions and CI/CD runners (like Jenkins or AWX), ensuring uniform Linux environments, independent SSH key management, and preventing laptop network disconnections from interrupting runs.
 2. **Q: What is Idempotency, and how does Ansible guarantee it?**
    - *A:* Idempotency means executing an operation multiple times produces the exact same end state: $f(f(x)) = f(x)$. Ansible modules check current state (file checksums, package registries, systemd sockets) before acting. If current state matches desired state, it exits with `changed: false`.
-3. **Q: Why keep the Root CA private key on VM3 (`control01`) rather than on NGINX (`proxy01`)?**
+3. **Q: Why keep the Root CA private key on VM3 (`control-vm3`) rather than on NGINX (`proxy-vm1`)?**
    - *A:* Security trust boundaries. The Root CA is the cryptographic root of trust for the entire organization. Public-facing gateways (like NGINX) are exposed to traffic and potential attacks. If NGINX were compromised, an attacker would steal the Root CA and issue forged certificates. Keeping the Root CA offline on the management control node upholds the principle of least privilege.
 4. **Q: Why use `validate: 'nginx -t -c %s'` in the template task?**
    - *A:* It renders the Jinja2 template into a temporary staging file first and tests NGINX syntax before replacing the production file in `/etc/nginx/conf.d/`. If a template syntax error exists, the deployment safely fails without breaking active web services.
@@ -1375,7 +1405,7 @@ ansible-playbook site.yml
 
 ### Core Project Requirements Audit
 - [ ] **Single Master Playbook**: `site.yml` orchestrates the complete 3-tier platform end-to-end.
-- [ ] **Three-VM Platform**: Configures `control01` (VM3), `proxy01` (VM1), and `web01` (VM2).
+- [ ] **Three-VM Platform**: Configures `control-vm3` (VM3), `proxy-vm1` (VM1), and `web-vm2` (VM2).
 - [ ] **Declarative Ansible Modules**: Packages (`dnf`), templates (`template`), services (`service`), firewalls (`firewalld`), SELinux (`seport`/`seboolean`), and hosts (`lineinfile`).
 - [ ] **Centralized Variables**: No hardcoded magic IPs, ports, or FQDNs; variables segregated into `group_vars/` and role defaults.
 - [ ] **Event-Driven Handlers**: Services reload/restart only when configurations change; zero flapping.
@@ -1386,10 +1416,10 @@ During your technical evaluation with the engineering team, demonstrate the foll
 1. [ ] **Present the Blueprint**: Show the 3-VM architecture diagram (`VM3 -> VM1 -> VM2`) and explain inventory groupings.
 2. [ ] **Code Walkthrough**: Explain `inventory/hosts.ini`, `group_vars/`, roles, templates, and `site.yml`.
 3. [ ] **Automated Launch Execution**: Run `ansible-playbook site.yml` against clean VMs.
-4. [ ] **Backend Web Server Verification**: Show Apache serving dynamic content locally on `web01`.
+4. [ ] **Backend Web Server Verification**: Show Apache serving dynamic content locally on `web-vm2`.
 5. [ ] **Reverse Proxy Verification**: Show NGINX forwarding client requests to Apache.
 6. [ ] **Internal PKI Inspection**: Show Root CA and server certificate created by the automation with modern SANs.
-7. [ ] **Client Trust Verification**: Show Root CA installed in `/etc/pki/ca-trust/source/anchors/` on `control01`.
+7. [ ] **Client Trust Verification**: Show Root CA installed in `/etc/pki/ca-trust/source/anchors/` on `control-vm3`.
 8. [ ] **Name Resolution Verification**: Show `labapp.com` resolving to NGINX IP via `/etc/hosts`.
 9. [ ] **End-to-End HTTPS Access**: Connect via HTTPS (`curl -Iv https://labapp.com`) without certificate warnings.
 10. [ ] **Repeatability & Idempotency Proof**: Run `ansible-playbook site.yml` a second time; prove `changed=0`.
