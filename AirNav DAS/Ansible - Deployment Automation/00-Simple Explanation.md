@@ -3,7 +3,7 @@ title: "00 — Simple Explanation"
 aliases:
   - 00-Simple Explanation
   - Simple Explanation
-  - ELI5
+  - Fundamentals
 tags:
   - airnav/das
   - ansible
@@ -18,157 +18,176 @@ status: fundamentals reference
 
 # 00 — Simple Explanation
 
-> [!abstract] What this note is for
-> The other notes in this folder are the **evidence** — proof that everything works, written for a trainer who already knows the field. This note is different. This note is for **you**, to actually understand *why* every single line exists, using plain words and analogies, from the very first concept. Nothing here needs to be memorized for a deadline — the deployment is already done and audited. This is just for building the part of your brain that will still understand this stuff five years from now, in a different job, on a system that isn't this one.
->
-> Read it in order. Every section builds on the one before it. Whenever you see a `> [!question]-` box, click it open — those are the "wait, but why" moments, answered.
+> [!abstract] Purpose of this note
+> The other notes in this folder are **evidence** — proof, for a trainer, that the project works. This note is **instruction** — for you, so the underlying mechanisms actually stick. Every concept below is explained in plain, precise technical language first; that explanation stands on its own and should make sense with no outside knowledge. Where an analogy genuinely helps build intuition, it appears afterward, clearly marked, as an *addition* — never as a replacement for the real explanation.
+
+> [!info] How this note is formatted
+> - `[!info]` — a definition or a technical fact, stated precisely.
+> - `[!example]` — an **optional** analogy, offered after the technical explanation, to reinforce it.
+> - `[!tip]` — a practical note or a shortcut.
+> - `[!warning]` — a real mistake this project actually hit, and why.
+> - `[!question]-` — a folded "wait, but why" answer. Click to expand.
+> - Code blocks are followed immediately by a plain-language breakdown — read the code, then the paragraph under it.
 
 ---
 
 ## Contents
 
-1. [[#Part 1 — The Big Picture, With No Jargon]]
-2. [[#Part 2 — Ansible Vocabulary, In Plain Words]]
-3. [[#Part 3 — YAML, the Language Everything Is Written In]]
-4. [[#Part 4 — The Project Files, One at a Time, Line by Line]]
-5. [[#Part 5 — Milestone 2 — Apache, Line by Line]]
-6. [[#Part 6 — Milestone 4 — The Certificate Authority, Line by Line]]
-7. [[#Part 7 — Milestone 3 — NGINX, Line by Line]]
-8. [[#Part 8 — Milestone 5 — The Client, Line by Line]]
-9. [[#Part 9 — Milestone 6 — Why Running It Twice Proves Anything]]
-10. [[#Part 10 — The Whole Thing, One More Time, Beginning to End]]
-11. [[#Part 11 — Glossary]]
+1. [[#1. The Architecture — What Is Actually Being Built]]
+2. [[#2. Why Automation Instead of Doing It by Hand]]
+3. [[#3. Why HTTPS Needs a Private Certificate Authority]]
+4. [[#4. Ansible Concepts, Defined Precisely]]
+5. [[#5. YAML — the Notation Everything Is Written In]]
+6. [[#6. The Project's Configuration Files, Explained Line by Line]]
+7. [[#7. Milestone 2 — the Apache Role, Line by Line]]
+8. [[#8. Milestone 4 — the Certificate Authority Role, Line by Line]]
+9. [[#9. Milestone 3 — the NGINX Role, Line by Line]]
+10. [[#10. Milestone 5 — the Client Role, Line by Line]]
+11. [[#11. Milestone 6 — Why Re-Running the Same Command Proves Anything]]
+12. [[#12. Full Execution, Start to Finish, in Order]]
+13. [[#13. Glossary]]
 
 ---
 
-## Part 1 — The Big Picture, With No Jargon
+## 1. The Architecture — What Is Actually Being Built
 
-### The three-house analogy
-
-Imagine three houses on a street, and you — the homeowner — are not allowed to knock on two of them directly. Here's the street:
+Three virtual machines exist. Each one runs exactly one role, and network rules restrict which machine can talk to which other machine.
 
 ```mermaid
 flowchart LR
-    You["You, standing outside<br>(a visitor / control-vm3)"] -->|"knock on this door only"| House1["House 1 — proxy-vm1<br>the FRONT house"]
-    House1 -->|"private hallway, no windows"| House2["House 2 — web-vm2<br>the BACK house, no front door"]
+    Client["control-vm3<br>192.168.100.40<br>runs the automation<br>+ acts as a test client<br>+ hosts the certificate authority"]
+    Proxy["proxy-vm1<br>192.168.100.41<br>runs NGINX"]
+    Web["web-vm2<br>192.168.100.42<br>runs Apache"]
+
+    Client -->|"HTTPS, port 443<br>the only port open to everyone"| Proxy
+    Proxy -->|"HTTP, port 8080<br>firewall only allows this from Proxy's IP"| Web
 ```
 
-- **House 1 (proxy-vm1)** is the only house with a front door facing the street. Anyone visiting has to knock here.
-- **House 2 (web-vm2)** has no front door at all — the only way in is through a private hallway that connects it to House 1. Nobody from the street can reach it directly.
-- **You (control-vm3)** are the visitor, and also — this is the twist — the person who *built* both houses using instructions, and the person who *made the ID cards* everyone uses to prove the houses are real and safe.
+**Why split one job across three machines instead of running everything on one?** Two independent technical reasons:
 
-Why build it this way instead of just one house? Because if House 2 (where the actual valuables — the webpage — are kept) never has a front door, nobody can break into it directly. Every visitor has to go through House 1 first, and House 1 can be watched, locked down, and inspected far more easily than trying to guard two open doors.
+1. **Reduced attack surface.** `web-vm2` — where the actual application logic and content live — has no port open to the general network at all; a firewall rule on it accepts connections on port 8080 only from the exact IP address of `proxy-vm1`. Nothing else on the network, including `control-vm3`, can reach it directly. If an attacker only has network access to the "public" side, `web-vm2` is unreachable regardless of any vulnerability it might have.
+2. **Separation of concerns.** Encryption (HTTPS) and content generation (the web page) are handled by two different pieces of software, each doing one job. This mirrors how real production systems are built: a dedicated reverse proxy layer handles TLS, routing, and rate-limiting, while application servers behind it only need to speak plain HTTP on a private network.
 
-That's the entire shape of this project. Everything else — the certificates, the automation, the tests — exists to make that one sentence true and *provably* true.
-
-### The three real machines
-
-| In the analogy | Real name | Real job |
-| --- | --- | --- |
-| The visitor / builder | `control-vm3` | Runs the automation, tests the result, also makes the ID cards (certificates) |
-| House 1, front door | `proxy-vm1` | Runs NGINX — the only thing a real client ever talks to |
-| House 2, no front door | `web-vm2` | Runs Apache — makes the actual webpage, but is walled off from the outside |
-
-### Why "automation" at all — the recipe-card analogy
-
-Imagine you have to bake the exact same cake in three different kitchens, and you have to do it again next month, and the month after. You have two choices:
-
-1. **Do it by hand every time** — remember every step, every ingredient amount, every oven temperature, for every kitchen. One tired evening, you forget the baking powder in kitchen #2, and nobody notices until the cake collapses.
-2. **Write the recipe down once**, in a very precise way, and hand it to a robot that reads it exactly and never skips a step, never gets tired, and — this is the important part — **checks what's already in the kitchen first**, so if the flour is already measured out correctly, it doesn't dump more flour in.
-
-Ansible is that robot. The "recipe" is called a **playbook**. And "checking what's already there first" is called **idempotency** — a word that just means *"doing this again causes no extra harm."* You'll see that word constantly; every time you do, mentally replace it with "the robot checks before it acts."
-
-### Why certificates and "HTTPS" at all — the passport-office analogy
-
-Imagine a small country invents its own passport system, just for itself:
-
-- The country sets up **one passport office** that everyone in the country agrees to trust. That office is the **Root Certificate Authority (Root CA)**.
-- When a citizen (in our case, the website `labapp.com`) needs a passport, the passport office checks their details and stamps a passport for them. That stamped passport is the **server certificate**.
-- Anyone who trusts *the passport office* automatically trusts *any passport it stamped* — they don't need to personally verify every citizen, just the one office.
-- A border guard (your web browser, or `curl`) who has never heard of this passport office would reject the passport as fake. So you have to **tell the border guard, ahead of time, "this specific office is legitimate, trust its stamps."** That's what installing the Root CA into a **trust store** means.
-- The passport also has to say exactly *whose* passport it is — in our case, "this passport belongs to `labapp.com`." That's the **Subject Alternative Name (SAN)**. A border guard checks the name on the passport against the name of the person standing in front of them; if they don't match, the passport is rejected even if the office that stamped it is legitimate.
-
-Every single PKI concept in this project — Root CA, server certificate, SAN, trust store, "chain of trust" — is just a more formal way of describing that passport office story.
-
-### Why a "reverse proxy" at all — the hotel-receptionist analogy
-
-Imagine a hotel where guests are never allowed to walk into the kitchen. Instead:
-
-- A guest tells the **receptionist** (NGINX) what they want.
-- The receptionist walks down a staff-only hallway (a firewalled, internal-only network) to the **kitchen** (Apache) and places the order.
-- The kitchen makes the food and hands it back to the receptionist.
-- The receptionist brings it to the guest, at the front desk, and the guest never sees the kitchen at all.
-
-The receptionist is also the only one wearing a name badge the hotel issued (the TLS certificate) — guests check that badge before trusting anything the receptionist says. The kitchen doesn't need a badge, because guests never interact with it directly.
+> [!example] Analogy (optional)
+> This is the same reason a business has one receptionist at the front desk instead of letting every visitor wander the building looking for the right department. The receptionist is the only person a visitor ever has to interact with directly; everyone else works behind a door the visitor never opens.
 
 ---
 
-## Part 2 — Ansible Vocabulary, In Plain Words
+## 2. Why Automation Instead of Doing It by Hand
 
-| Fancy term | What it actually means, in one sentence |
+Configuring a server by hand means typing commands into a terminal, one at a time, and remembering to repeat the exact same sequence — correctly, in the same order, with the same values — on every machine that needs it, every time it needs it again (a rebuild, a new environment, a fix after a mistake).
+
+This has two specific, well-documented failure modes:
+
+1. **Human error under repetition.** A person who has typed the same 40-step sequence five times is statistically more likely to skip step 23 on the sixth attempt than a program is. There is no mechanism by which a human "remembers" a step was already done correctly except their own attention.
+2. **No record of what was actually done.** Once a command is typed into a terminal, the only record of it is whatever the human wrote down separately (if anything). If two administrators configure "the same" server months apart, there is no guarantee they did it identically, because the instructions live in memory and notes, not in an artifact that can be inspected, versioned, or re-executed.
+
+**Ansible solves this by making the desired end state the input, not the sequence of commands.** Every Ansible **task** describes a *state* — "package X is installed," "this file contains exactly this content," "this service is running" — not a *command*. A program called a **module** is responsible for reading the current state of the machine, comparing it to the desired state written in the task, and only taking action if they differ. This is the technical meaning of **idempotency**: running the same instruction repeatedly produces the same end result every time, because each run starts by checking, not by blindly acting.
+
+Concretely: the module used to install a package checks the system's package database first. If the package is already installed at the correct version, the module does nothing and reports "no change." If it is missing, only then does it install it. This is fundamentally different from typing `dnf install httpd` in a terminal, which will simply attempt an install (or complain the package already exists) with no built-in concept of "check first."
+
+> [!example] Analogy (optional)
+> Think of the difference between telling someone "turn the oven dial to 350 and hold it there" (a command, executed blindly) versus "keep the oven at 350" (a target state, which a thermostat checks against continuously and only adjusts when there's a real difference). Ansible tasks are written as thermostats, not as one-time dial turns.
+
+---
+
+## 3. Why HTTPS Needs a Private Certificate Authority
+
+### 3.1 What a certificate actually is
+
+An HTTPS website presents an **X.509 certificate** to every visitor's browser. Structurally, a certificate is a data file containing:
+
+- A **subject** — who this certificate identifies (here, the domain name `labapp.com`).
+- A **public key** — half of a mathematically linked pair of numbers (a *key pair*). The other half, the **private key**, is kept secret by the server and never transmitted anywhere.
+- An **issuer** — who is vouching for this certificate.
+- A **digital signature**, produced by the issuer's own private key, over the entire contents of the certificate.
+
+### 3.2 What a digital signature proves, mathematically
+
+A private key can perform an operation on data (called *signing*) that produces a signature. Anyone holding the matching **public key** can perform a *verification* operation and get a definite yes/no answer to the question: **"was this exact data signed by the private key that corresponds to this specific public key, and has it been altered since?"** This is a property of the mathematics involved (asymmetric cryptography, e.g. RSA), not a policy or a promise — changing a single byte of the signed data makes verification fail deterministically.
+
+This means: if a browser has a copy of an issuer's public key (packaged inside the issuer's own certificate) and it can verify that a website's certificate was signed by the matching private key, it has **mathematical proof** that the issuer specifically approved that certificate — without the issuer needing to be contacted at the time.
+
+### 3.3 What "chain of trust" and "Root CA" actually mean
+
+A browser does not trust certificates by default. It ships with (or is configured with) a fixed list of certificates it has been told, in advance, to trust unconditionally — these are called **trust anchors**, and an authority whose certificate is in that list is called a **Certificate Authority (CA)**. Trusting a CA is not derived from any calculation; it is a configuration decision, made once, by whoever controls the browser or operating system.
+
+When a browser receives a website's certificate, it checks: *"was this signed by a private key whose matching public certificate is one of my trust anchors, or by a private key whose certificate was itself signed by one of my trust anchors?"* This checking process, potentially walking up through multiple signing steps, is the **chain of trust**. A **Root CA** is a certificate at the top of such a chain — its certificate is **self-signed** (it signs its own certificate with its own private key, since there is nothing above it to sign it), and it is trusted purely because it has been explicitly installed as a trust anchor.
+
+This project builds exactly this, at the smallest possible scale: one Root CA, and one certificate it signs directly for `labapp.com`.
+
+### 3.4 Why the hostname check (SAN) matters separately from the signature check
+
+A valid signature only proves *who issued the certificate*. It says nothing about *which website is allowed to use it*. For that, a certificate carries a field called the **Subject Alternative Name (SAN)** — a list of hostnames the certificate is valid for. Modern TLS clients (per IETF RFC 9525, which superseded the older RFC 6125) check the hostname the user actually typed against this SAN list specifically, and reject the connection if it doesn't match, even if the signature is perfectly valid and the issuer is fully trusted. This is a second, independent check — a certificate can pass the trust check and still fail the identity check, or vice versa.
+
+> [!example] Analogy (optional)
+> A signature check is like verifying a notary's stamp on a document is genuine. A SAN check is like confirming the document actually names the specific person standing in front of you, and not someone else. A document can have a perfectly genuine notary stamp while still being the wrong person's document.
+
+### 3.5 Why this project runs its own CA instead of using a public one
+
+A publicly trusted CA (the kind that comes pre-installed in every browser) will only sign a certificate for a domain name after verifying the requester actually controls it — usually by proving control over its DNS or web server, over the public internet. `labapp.com` in this lab is an internal name on a private network that no public CA can verify, so a public CA cannot be used here. Building a small, self-contained CA solves the identical cryptographic problem (issuing a certificate whose signature can be verified) without needing public-internet verification — at the cost that only machines explicitly told to trust this specific Root CA will accept certificates it issues. That trade-off is the entire reason [[Milestone 5 — Client Landing Zone|Milestone 5]] exists: something has to explicitly install this Root CA as a trust anchor on the client, because no browser or operating system trusts it by default.
+
+---
+
+## 4. Ansible Concepts, Defined Precisely
+
+| Term | Precise definition |
 | --- | --- |
-| **Control node** | The one computer that runs the automation and gives orders. Here: `control-vm3`. |
-| **Managed node** | A computer that receives orders and obeys them. Here: `proxy-vm1` and `web-vm2` (and control-vm3 also manages *itself*). |
-| **Inventory** | A phone book: the list of every managed computer, its address, and which "team" it belongs to. |
-| **Group** | A team name in that phone book — e.g., "everyone who should run NGINX" is the `proxy` group. |
-| **Playbook** | The entire, ordered to-do list for the whole day, across every team. |
-| **Play** | One chapter of that to-do list, aimed at one team. "Chapter 2: everything the `webserver` team needs to do." |
-| **Task** | One single instruction inside a chapter. "Install this package." |
-| **Module** | The actual tool used to carry out a task — like `dnf` (the tool for installing packages) or `template` (the tool for filling out a form and delivering it). |
-| **Variable** | A sticky note with a value written on it, that many different instructions can look at. Change the sticky note once, everything that reads it changes too. |
-| **Template** | A fill-in-the-blank worksheet. The blanks get filled in with variables before the worksheet is delivered to a computer. |
-| **Handler** | A special instruction that only runs **if something changed**. "Only mop the floor if you actually spilled something." |
-| **Role** | A labeled toolbox containing everything needed for one specific job — its own instructions, its own worksheets, its own "only if messy" rules. |
-| **Fact** | Something Ansible learns by looking at a computer itself — its operating system, its IP address — rather than being told. |
-| **Idempotent** | "Doing this again causes no extra harm, because it checks first." The single most important word in this whole project. |
-
-> [!question]- Why not just write one giant list of commands instead of all these separate concepts (roles, plays, handlers...)?
-> You *could* — and that's actually what the very first rough draft of this project looked like (a to-do list of nothing but "ping this machine"). The problem shows up the moment something needs to be reused, changed, or debugged. If "install NGINX" is written out in five different places because five different files needed it, and you find a mistake, you now have to fix it in five places and hope you didn't miss one. A **role** exists so "everything about NGINX" lives in exactly one folder. A **variable** exists so a value like the domain name is typed once. A **handler** exists so a service doesn't restart 50 times a day for no reason. Every one of these concepts exists to solve a real, specific headache — not to make things fancier than they need to be.
+| **Control node** | The machine that runs the `ansible-playbook` command and initiates every action. Here: `control-vm3`. |
+| **Managed node** | A machine that Ansible connects to (over SSH) and configures. Here: `proxy-vm1`, `web-vm2`, and `control-vm3` itself. |
+| **Inventory** | A file listing every managed node, its network address, and the named groups it belongs to. |
+| **Group** | A named subset of the inventory, used to target instructions at specific machines by role rather than by individual name. |
+| **Playbook** | A YAML file containing an ordered list of **plays**, executed top to bottom. |
+| **Play** | A block that pairs one target (a host or group) with a set of roles or tasks to run against it. |
+| **Task** | A single, named instruction: one module invocation with specific arguments. |
+| **Module** | A self-contained program (most are written in Python) that Ansible copies to the managed node over SSH, executes once, and removes. Each module implements the "check current state, act only if different" logic for one kind of resource (a package, a file, a service, a firewall rule, and so on). |
+| **Variable** | A named value, substituted into tasks and templates with `{{ variable_name }}` syntax. |
+| **Fact** | A variable whose value Ansible discovered by directly inspecting a managed node (its OS, IP address, hardware), rather than one a human wrote down. |
+| **Template** | A text file (extension `.j2`, for the Jinja2 templating engine) containing `{{ variable }}` placeholders, rendered into a real file by substituting current variable values before delivery. |
+| **Handler** | A task that is only executed if a different task, earlier in the same play, reported that it made a change and explicitly requested (`notify:`) this handler to run. Handlers run once, after all regular tasks in the play, unless forced to run earlier. |
+| **Role** | A directory with a fixed internal structure (`tasks/`, `handlers/`, `templates/`, `defaults/`) that packages everything needed to configure one component, so it can be applied to any group of hosts by name. |
+| **Collection** | A distributable package of additional modules and/or roles, installed separately from Ansible's built-in module set, when a task needs a capability Ansible doesn't ship by default (this project uses `ansible.posix` for firewall/SELinux tasks and `community.crypto` for certificate generation). |
+| **Idempotent** | Describes a task or module whose repeated execution, with unchanged inputs, produces no further change after the first successful run — because it verifies current state before acting. |
 
 ---
 
-## Part 3 — YAML, the Language Everything Is Written In
+## 5. YAML — the Notation Everything Is Written In
 
-Ansible files (except `ansible.cfg`) are written in **YAML** ("Yet Another Markup Language" — yes, the name is a joke about how many of these formats already existed). YAML's entire job is to describe **lists** and **key-value pairs** using indentation instead of curly braces or tags. Here is everything you actually need to know:
+YAML ("YAML Ain't Markup Language") represents two structures: **key–value pairs** and **ordered lists**, using line breaks and indentation instead of brackets or closing tags. There is no third structure to learn.
 
 ```yaml
-# A key-value pair: the "key" is on the left, the "value" is on the right
+# A key-value pair: a name, a colon, then its value
 domain_name: "labapp.com"
 
-# A list of things, written with a dash before each item
-colors:
-  - red
-  - green
-  - blue
+# A list: each item starts with a dash, at the same indentation level
+ports:
+  - 80
+  - 443
 
-# A "map" (a group of related key-value pairs), shown by indenting
+# A nested map: indenting under a key groups related pairs together
 person:
   name: Hans
   role: trainee
-
-# Indentation is not decoration — it is the ONLY thing that says
-# "this belongs inside that." Two spaces is the convention here.
-# A tab character will break it. This trips up almost everyone once.
 ```
 
-Ansible task files are just lists of maps — every `- name: ...` you see is one item in a list, and everything indented under it is that item's details:
+Indentation is not cosmetic — it is the only thing that indicates "this value belongs inside that structure." The convention throughout this project is two spaces per indentation level; a tab character in place of spaces is a common, hard-to-spot error, because most editors render a tab and two spaces identically to the eye.
+
+An Ansible task file is a **list of maps** — each `- name: ...` line begins one list item (one task), and every line indented beneath it is a key–value pair describing that task:
 
 ```yaml
-- name: Install Apache        # this whole block is ONE task
-  ansible.builtin.dnf:        # "dnf" is the tool being used
-    name: httpd                #   ...and this is an argument to that tool
-    state: present              #   ...and so is this
+- name: Install Apache        # one list item = one task, with the key "name"
+  ansible.builtin.dnf:        # a second key on this same task: which module to run
+    name: httpd                 # an argument passed to that module
+    state: present              # a second argument passed to that module
 ```
 
-Read it out loud as: *"Here is a task named 'Install Apache.' Use the `dnf` tool. Tell it the package name is `httpd`, and the desired state is `present` (installed)."*
-
-`{{ double curly braces }}` are how a **variable** gets substituted in. `{{ domain_name }}` means "put whatever `domain_name` is currently set to, right here." This is called **Jinja2 templating**, and it works both inside `.yml` files and inside `.j2` template files.
+`{{ double curly braces }}` mark a place where a variable's current value is substituted before the file is used. This substitution mechanism is called Jinja2 templating, and it works identically inside plain `.yml` task files and inside `.j2` template files.
 
 ---
 
-## Part 4 — The Project Files, One at a Time, Line by Line
+## 6. The Project's Configuration Files, Explained Line by Line
 
-### 4.1 `ansible.cfg` — the settings note stuck to the front of the recipe book
+### 6.1 `ansible.cfg` — settings for how Ansible itself behaves
 
 ```ini
 [defaults]
@@ -189,23 +208,23 @@ become_user = root
 become_ask_pass = False
 ```
 
-| Line | In plain words |
+| Setting | Effect |
 | --- | --- |
-| `inventory = ./inventory/hosts.yml` | "The phone book is in this exact file. Don't guess." |
-| `roles_path = ./roles` | "The toolboxes (roles) are in this folder." |
-| `collections_path = ./collections` | "Extra tools we downloaded live here, not in some system-wide folder." |
-| `remote_user = root` | "When you log into a managed computer, log in as `root`." |
-| `forks = 5` | "You're allowed to talk to up to 5 computers at the exact same time." (We only have 3, so this never becomes a limit here.) |
-| `host_key_checking = True` | "Double-check that each computer really is who it claims to be before talking to it" — the same warning SSH gives you the first time you connect somewhere new. |
-| `retry_files_enabled = False` | "Don't leave behind little `.retry` leftover files when something fails." Housekeeping. |
-| `interpreter_python = auto_silent` | "Use whatever Python is on the managed computer, and don't nag me about which one you picked." |
-| `callback_result_format = yaml` | "When you print results to my screen, use the readable, indented format — not a single ugly wall of text." |
-| `become = True` / `become_method = sudo` | "Whatever the task needs to do, do it with administrator power, using `sudo` to get it." |
+| `inventory = ./inventory/hosts.yml` | Explicitly names the inventory file, rather than relying on a system-wide default location. |
+| `roles_path = ./roles` | Tells Ansible where to find role directories referenced in `site.yml`. |
+| `collections_path = ./collections` | Uses a project-local copy of downloaded collections instead of a system-wide one, so the project's dependencies travel with the project folder. |
+| `remote_user = root` | The SSH login account used on every managed node. |
+| `forks = 5` | The maximum number of managed nodes Ansible will act on simultaneously (this project only has 3, so this ceiling is never actually reached). |
+| `host_key_checking = True` | Verifies each managed node's SSH host key matches what was recorded on first connection, protecting against a machine at that address being silently replaced. |
+| `retry_files_enabled = False` | Disables Ansible's default behavior of writing a `.retry` file listing failed hosts after an unsuccessful run. |
+| `interpreter_python = auto_silent` | Uses whichever Python interpreter is present on the managed node, without printing an informational warning about the detection. |
+| `callback_result_format = yaml` | Formats task output as indented, readable YAML in the terminal instead of a single-line JSON blob. |
+| `become = True` / `become_method = sudo` | Escalates privilege to `root` via `sudo` for tasks that require it. |
 
-> [!question]- If `remote_user` is already `root`, why does `become = True` matter at all?
-> Right now, it doesn't change behavior — logging in as root already has full power, so "becoming root" from root is a no-op. It's there for the future: if this project ever switches to logging in as an ordinary, less powerful user (which is what real production systems do, for security), `become: True` is already the switch that says "escalate to root for tasks that need it." Nothing else in the project would need to change.
+> [!question]- If `remote_user` is already `root`, what does `become` actually add?
+> Nothing observable today — escalating to root from an already-root session has no effect. Its purpose is forward-looking: if this project's login account is ever changed to a lower-privileged user (standard practice in production, since logging in directly as root is a security liability), `become: True` is already the mechanism that grants root privileges *for the specific tasks that need them*, without any other file in the project needing to change.
 
-### 4.2 `inventory/hosts.yml` — the phone book
+### 6.2 `inventory/hosts.yml` — the list of managed machines and their groups
 
 ```yaml
 all:
@@ -233,19 +252,12 @@ all:
         client:
 ```
 
-Read this top to bottom as nested boxes, like Russian dolls:
+This is a nested structure: `all` contains `children`, each of which is a named group. `proxy` contains one host, `proxy-vm1`, whose network address is given by `ansible_host`. `control-vm3` is listed under `client` with `ansible_connection: local` — this setting tells Ansible not to open an SSH connection for this host at all, and instead execute tasks directly on the machine `ansible-playbook` is already running on, since it is targeting itself. `control-vm3` also appears separately under `pki_ca` — a single host can be a member of any number of groups simultaneously; group membership represents *facts about a host's role*, not a mutually exclusive category. `lab` defines no hosts directly; its `children` list means "everything in `proxy`, `webserver`, and `client`, combined," providing a single name that refers to every machine at once.
 
-- `all` is the biggest box — literally every computer, always.
-- Inside it, `children` lists smaller boxes (groups).
-- `proxy` is a small box containing one computer, `proxy-vm1`, whose address is `192.168.100.41`.
-- `client` is a small box containing `control-vm3` — but notice its address is `127.0.0.1` (a computer's own "this is me" address) and it has `ansible_connection: local`, meaning: *"don't SSH anywhere for this one — you're already standing on it, just run the instructions directly."*
-- `pki_ca` is its own box, and it also contains `control-vm3` — a computer is allowed to be a member of more than one box at once, the same way a person can be both "on the soccer team" and "in the choir."
-- `lab` is a box that doesn't list any computers directly — it just says "my members are the proxy box, the webserver box, and the client box combined." It's a box made of other boxes, used whenever you need to say "everyone."
+> [!question]- Why is `control-vm3` in two separate groups instead of one combined group?
+> Because `client` and `pki_ca` describe two independent facts that happen to both be true of the same machine today: "this machine should receive client-side configuration" and "this machine hosts the certificate authority." Keeping them as separate groups means any file in the project that needs to know "which host runs the CA" queries the `pki_ca` group specifically, and would continue to work unmodified if the certificate authority were later moved to a dedicated fourth machine — only the inventory would need to change.
 
-> [!question]- Why does `control-vm3` need to be in two separate boxes (`client` and `pki_ca`) instead of one?
-> Because they mean two *different things that happen to be true about the same computer right now*. `client` means "this machine should get the test-client setup (the trusted certificate, the hosts-file entry)." `pki_ca` means "this machine is where the certificate factory lives." Today, both happen to be true of `control-vm3`. If someone later built a fourth machine dedicated only to being the certificate factory, you'd just move the `pki_ca` line to it — nothing else in the whole project would need to change, because every file that cares about "where's the CA" asks the `pki_ca` group, not a hardcoded machine name.
-
-### 4.3 `group_vars/all.yml` — sticky notes everyone can read
+### 6.3 `group_vars/all.yml` — variables shared by every host
 
 ```yaml
 domain_name: "labapp.com"
@@ -261,10 +273,6 @@ webpage_marker: "DEPLOYED-BY-ANSIBLE"
 
 pki_dir: "/root/lab-pki"
 pki_org: "AirNav FCO Engineering"
-pki_ou: "DAS Lab"
-pki_country: "PH"
-pki_state: "Western Visayas (Region VI)"
-pki_city: "Iloilo"
 root_ca_common_name: "AirNav DAS Lab Root CA"
 root_ca_valid_days: 3650
 server_cert_valid_days: 199
@@ -274,59 +282,48 @@ server_cert_file:  "{{ pki_dir }}/{{ domain_name }}.crt"
 server_key_file:   "{{ pki_dir }}/{{ domain_name }}.key"
 ```
 
-Every line here is a sticky note with a name and a value. The two interesting ones are `proxy_address` and `backend_address` — they don't have a plain value, they have a little formula instead:
+Most of these lines assign a literal value to a name. Two lines instead compute a value from the inventory:
 
 ```
-"{{ hostvars[groups['proxy'][0]]['ansible_host'] }}"
+proxy_address: "{{ hostvars[groups['proxy'][0]]['ansible_host'] }}"
 ```
 
-Read this from the inside out, like peeling an onion:
+Evaluated in order: `groups['proxy']` retrieves the list of host names belonging to the `proxy` group — `['proxy-vm1']`. `groups['proxy'][0]` retrieves the first element of that list (list indices start at 0) — `'proxy-vm1'`. `hostvars['proxy-vm1']` retrieves the complete set of known variables for that specific host. `hostvars['proxy-vm1']['ansible_host']` retrieves that host's configured network address — `192.168.100.41`. The net effect: `proxy_address` always equals whatever address the inventory currently assigns to the proxy host, without that address being typed a second time anywhere else in the project. If the inventory changes, every file that references `proxy_address` reflects the change automatically on the next run.
 
-1. `groups['proxy']` — "look in the phone book, find the box named `proxy`." That gives you a list of computer names in that box: `['proxy-vm1']`.
-2. `groups['proxy'][0]` — "take the first name in that list" (lists start counting from 0, so `[0]` means "the first one"). That gives you `proxy-vm1`.
-3. `hostvars['proxy-vm1']` — "look up everything known about the computer named `proxy-vm1`."
-4. `hostvars['proxy-vm1']['ansible_host']` — "and specifically, what address did the phone book give for it?" That gives you `192.168.100.41`.
-
-So this whole formula means: **"whatever address the phone book lists for the proxy computer, that's what `proxy_address` equals."** Nobody had to type `192.168.100.41` a second time anywhere. If the proxy ever moved to a new address, you'd change it in the phone book (`inventory/hosts.yml`) once, and this sticky note updates itself automatically the next time the playbook runs.
-
-The three PKI file-path lines at the bottom (`root_ca_cert_file`, `server_cert_file`, `server_key_file`) are just building full file paths out of smaller pieces, the same way you might write "my file will be at `/home/`, plus `my_name`, plus `/notes.txt`."
-
-### 4.4 `group_vars/proxy.yml`, `webserver.yml`, `client.yml` — sticky notes for one team only
+### 6.4 `group_vars/proxy.yml`, `webserver.yml`, `client.yml` — variables scoped to one group
 
 ```yaml
-# proxy.yml — only proxy-vm1 reads these
+# proxy.yml
 nginx_tls_dir: "/etc/pki/nginx"
 nginx_cert_path:  "{{ nginx_tls_dir }}/{{ domain_name }}.crt"
 nginx_key_path:   "{{ nginx_tls_dir }}/private/{{ domain_name }}.key"
 nginx_chain_path: "{{ nginx_tls_dir }}/root-ca.crt"
 nginx_ssl_protocols: "TLSv1.2 TLSv1.3"
 ```
-
 ```yaml
-# webserver.yml — only web-vm2 reads these
+# webserver.yml
 apache_document_root: "/var/www/html"
 apache_vhost_file: "/etc/httpd/conf.d/{{ domain_name }}.conf"
 ```
-
 ```yaml
-# client.yml — only control-vm3 (as a client) reads this
+# client.yml
 client_trust_anchor: "/etc/pki/ca-trust/source/anchors/airnav-das-lab-root-ca.crt"
 ```
 
-Think of `group_vars/all.yml` as a notice board in the building lobby everyone walks past, and these three files as notice boards inside each team's own break room — only that team needs to see them, so there's no reason to clutter the lobby with it.
+Variables defined in `group_vars/<groupname>.yml` are only visible to hosts in that specific group. This keeps a value like `nginx_tls_dir` — meaningless to `web-vm2`, which never touches NGINX — out of the file every host reads.
 
-### 4.5 `host_vars/web-vm2.yml` — a sticky note for exactly one computer
+### 6.5 `host_vars/web-vm2.yml` — a variable scoped to exactly one host
 
 ```yaml
 webpage_message: "Served by Apache on web-vm2 through the NGINX reverse proxy."
 ```
 
-This is the most specific level of all — a note taped directly to one specific desk, not the break room, not the lobby. If a second web server ever joined the team, it would get its own `host_vars/web-vm3.yml` with its own message, and nobody's note would interfere with anybody else's.
+This is the most specific scope available: a value that applies to one named host only. If a second web server joined the inventory, it would receive its own `host_vars/<hostname>.yml` file with its own value for `webpage_message`, independent of this one.
 
-> [!question]- What happens if the SAME sticky-note name shows up in more than one of these files?
-> The most specific one wins. This is called **variable precedence**, and it's exactly like a dress code: a company-wide policy ("business casual") can be overridden by a specific department's stricter rule ("lab coats required"), which can be overridden by a specific person's own doctor's note ("no lab coat, allergic"). The individual, most specific rule always wins over the general one. [[Milestone 1 — Project Hangar#1.4 Variables and precedence|The exact order is written out here]].
+> [!question]- What happens if the same variable name is defined in more than one of these files?
+> Ansible resolves this using a fixed rule called **variable precedence**: the more specific scope always overrides the more general one. A value in `host_vars/` overrides the same name in `group_vars/<group>.yml`, which overrides `group_vars/all.yml`, which overrides a role's own `defaults/main.yml`. [[Milestone 1 — Project Hangar#1.4 Variables and precedence|The complete ordering is documented here]].
 
-### 4.6 `collections/requirements.yml` — the shopping list for extra tools
+### 6.6 `collections/requirements.yml` — pinned external module dependencies
 
 ```yaml
 collections:
@@ -336,12 +333,12 @@ collections:
     version: ">=2.15.0,<3.0.0"
 ```
 
-Ansible comes with a basic toolbox out of the box (`ansible.builtin`), but it doesn't know how to touch a firewall or build a certificate on its own — those are specialty tools you have to order separately, called **collections**. This file is the exact order form: which specialty toolbox, and which version range, so that anyone running this project gets the *same* tools, not whatever happens to be newest on the day they install it.
+Ansible's built-in module set does not include firewall management or certificate generation; those capabilities are provided by two separately-installed collections. This file specifies not just *which* collections are required, but a **version range** for each — pinning prevents an automatic upgrade to a newer version from silently changing behavior.
 
-> [!question]- Why pin a version range instead of just "give me the latest one"?
-> Because "latest" changes underneath you without warning. This project actually hit that exact problem: the newest `ansible.posix` (version 1.6) printed a warning that it doesn't support the Ansible version installed here, and could have broken silently in the future. Pinning `<1.6.0` says "I've tested against this range, stay here until someone deliberately checks the next version and updates the pin."
+> [!warning] A real problem this pinning prevented
+> `ansible.posix` version 1.6.x explicitly declares that it does not support the version of ansible-core installed on this project's control node (2.14.18), and prints a compatibility warning. The version range `<1.6.0` keeps the project on the last version confirmed to work correctly, rather than silently pulling in an incompatible release the next time collections are installed.
 
-### 4.7 `site.yml` — the master to-do list, in five chapters
+### 6.7 `site.yml` — the master playbook
 
 ```yaml
 - name: "Play 0 | Pre-flight checks on every lab host"
@@ -359,7 +356,6 @@ Ansible comes with a basic toolbox out of the box (`ansible.builtin`), but it do
         that:
           - domain_name is match('^[a-z0-9.-]+$')
           - backend_port | int > 0
-          - proxy_https_port | int > 0
         fail_msg: "..."
 
 - name: "Play 1 | Internal PKI on the control node"
@@ -381,28 +377,20 @@ Ansible comes with a basic toolbox out of the box (`ansible.builtin`), but it do
     - { role: verify, tags: [verify] }
 ```
 
-Think of this as a **table of contents for the whole day**, and each `- name: "Play ..."` is one chapter:
+Five plays, executed strictly in the order written:
 
-- **Chapter 0** happens on `lab` — remember, that's the box made of every other box, so this chapter runs on *all three machines*. Before doing anything real, it checks two things and **refuses to continue** if either is wrong:
-  1. Is this really the operating system this project was built for? (`ansible_facts['os_family'] == 'RedHat'` — a *fact*, remember, is something Ansible learned by actually looking at the machine, not something we told it.)
-  2. Do the important settings actually make sense — is the domain name a real-looking name, are the ports positive numbers?
-  
-  `assert` is the module doing the checking — it's the module whose entire job is "check this condition, and if it's false, stop everything and explain why," rather than silently limping forward with broken settings.
+- **Play 0** targets `lab` (every machine) and performs two validation checks before any real configuration begins. `ansible.builtin.assert` evaluates a list of conditions and halts the entire run with an explanatory message if any condition is false — this prevents, for example, applying configuration built for one operating system to a machine running a different one, or proceeding with an obviously malformed setting like an empty domain name.
+- **Play 1** targets only the `pki_ca` group and applies the `pki_ca` role — meaning every task file inside that role's directory is executed against that group.
+- **Plays 2 through 4** follow the identical pattern for their respective groups and roles.
 
-- **Chapter 1** happens only on the `pki_ca` box — remember, that's just `control-vm3` right now. It runs the `pki_ca` role — meaning "open that toolbox and do everything inside it."
+The `tags:` value attached to each role allows a later, partial invocation — `ansible-playbook site.yml --tags nginx` executes only the `nginx_proxy` role's tasks, skipping the rest of the playbook, which is useful when only one component needs to be re-applied.
 
-- **Chapters 2, 3, 4** each open one more toolbox, on the team that toolbox belongs to.
-
-The `tags: [pki]`, `tags: [apache]`, and so on are like labels on the toolboxes that let you say later, "just open the NGINX toolbox by itself" (`ansible-playbook site.yml --tags nginx`), without running the whole day's chapters.
-
-> [!question]- Why does Chapter 0 run `gather_facts: true` but the later chapters don't?
-> "Gathering facts" means Ansible actually connects to a machine and asks it questions — what's your operating system, what's your IP address, and so on. That's a real trip that takes a moment. Since Chapter 0 already visited every machine and asked, Ansible remembers the answers for the rest of the run — asking again in every later chapter would just be the same trip for no new information, so `gather_facts: false` in Chapters 1–4 means "don't bother, I already know."
+> [!question]- Why does Play 0 use `gather_facts: true` while later plays use `gather_facts: false`?
+> "Gathering facts" means Ansible connects to a managed node and queries it for information (operating system, IP addresses, and so on) before running any tasks. This is a real network round-trip. Since Play 0 already gathers facts from every host in `lab`, and those results remain available for the rest of the playbook run, repeating the gathering step in every subsequent play would only re-fetch identical information at the cost of additional time — `gather_facts: false` skips that redundant step.
 
 ---
 
-## Part 5 — Milestone 2 — Apache, Line by Line
-
-Full file recap in [[Milestone 2 — Web Server Role]]. Here, every single task gets the ELI5 treatment.
+## 7. Milestone 2 — the Apache Role, Line by Line
 
 ```yaml
 - name: Install Apache
@@ -410,7 +398,7 @@ Full file recap in [[Milestone 2 — Web Server Role]]. Here, every single task 
     name: "{{ apache_package }}"
     state: present
 ```
-**In plain words:** "Check if the `httpd` program is installed. If it's not, install it. If it already is, do nothing — don't even bother re-downloading it." `dnf` is AlmaLinux's package installer, the same kind of tool as an app store, just for a server instead of a phone.
+`dnf` is AlmaLinux's package manager. `state: present` is a declaration, not a command: it tells the module the desired end state is "this package exists on the system." The module checks the local package database first; installation only occurs if the package is currently absent.
 
 ```yaml
 - name: Set the Apache listen port (validated before it is written)
@@ -421,9 +409,7 @@ Full file recap in [[Milestone 2 — Web Server Role]]. Here, every single task 
     validate: httpd -t -f %s
   notify: Reload Apache
 ```
-**In plain words:** Apache normally answers on "door number 80" by default. This task finds the one line in its settings file that says which door to use, and changes it to door **8080** instead — but *before* saving that change, it hands the almost-changed file to Apache's own checker (`httpd -t -f %s`) and asks "would this still make sense?" Only if the answer is yes does it actually save. `notify: Reload Apache` means: "if this line actually needed changing, remind Apache about it afterward" — that's a handler being called.
-
-Think of `regexp` and `line` as: "find the line that *looks like this* (starts with the word `Listen`), and replace the whole thing with *this instead*." Nothing else in that big settings file gets touched.
+`lineinfile` finds a line in an existing file matching a pattern (`regexp`) and replaces it, or appends the line if no match is found — it modifies exactly one line and leaves the rest of the file untouched. Here, it locates the line beginning with `Listen` (Apache's directive for which TCP port to bind to) and rewrites it to use port 8080 rather than the default of 80, since port 80 is reserved for NGINX in this architecture. `validate: httpd -t -f %s` runs Apache's own configuration-syntax checker against a temporary copy of the file *before* the real file is overwritten; the write only proceeds if that check passes. `notify: Reload Apache` queues a handler to run later in this same play, but only because this task is expected to report a change.
 
 ```yaml
 - name: Deploy the backend virtual host
@@ -433,7 +419,7 @@ Think of `regexp` and `line` as: "find the line that *looks like this* (starts w
     mode: "0644"
   notify: Reload Apache
 ```
-**In plain words:** Take the fill-in-the-blank worksheet called `vhost.conf.j2`, fill in all its blanks using the current sticky notes (variables), and deliver the finished worksheet to the exact file path stored in `apache_vhost_file`. `mode: "0644"` is a **permission** setting — a code that means "the owner can read and write it, everyone else can only read it, nobody but the owner can run it as a program." You'll see permission codes like this a lot; think of them as a lock with three different keys: one for you, one for your group, one for everybody else.
+`template` renders a `.j2` file (substituting all `{{ variables }}` with their current values) and writes the result to `dest`. `mode: "0644"` sets Unix file permissions: the owner may read and write the file, and everyone else may only read it — appropriate for a configuration file that isn't secret but shouldn't be modifiable by other accounts.
 
 ```yaml
 - name: Deploy the managed webpage
@@ -442,7 +428,7 @@ Think of `regexp` and `line` as: "find the line that *looks like this* (starts w
     dest: "{{ apache_document_root }}/index.html"
     mode: "0644"
 ```
-**In plain words:** Same idea, different worksheet — this one fills in the actual webpage. Notice: **no `notify:` here.** That's on purpose — a webpage file doesn't need Apache "told about it," because Apache re-reads that file fresh every single time someone visits. Only *settings* files need a reload; plain content doesn't.
+The same mechanism, applied to the actual HTML content. This task has no `notify:` — Apache reads a static content file fresh on every request, so no service reload is required for a content change to take effect; only *configuration* changes require Apache to be told about them.
 
 ```yaml
 - name: Allow the backend port ONLY from the reverse proxy
@@ -454,7 +440,7 @@ Think of `regexp` and `line` as: "find the line that *looks like this* (starts w
     immediate: true
     state: enabled
 ```
-**In plain words:** This is building a locked door with a peephole that only opens for one specific visitor. `source address="{{ proxy_address }}/32"` means "only traffic that came from the proxy's exact address" (the `/32` is a technical way of saying "this one exact address, not a whole neighborhood of addresses"). `port port="8080" protocol="tcp"` means "and only if it's knocking on door 8080." `accept` means "if both of those are true, let it in" — everyone else gets turned away automatically. `permanent: true` means "keep this rule even after a reboot," and `immediate: true` means "also apply it right now, don't make me restart anything to see the effect."
+`firewalld` is the Linux firewall management service; a **rich rule** allows a more specific condition than a plain "open this port" rule. This rule reads as: accept TCP traffic on port 8080, but only if its source IP address is exactly `proxy_address/32` (`/32` denotes a single specific address, not a range). Traffic from any other source to this port is rejected by the firewall's default policy. `permanent: true` writes the rule so it survives a reboot; `immediate: true` also applies it to the currently running firewall instance, without requiring a restart to take effect.
 
 ```yaml
 - name: Ensure Apache is enabled at boot and running
@@ -463,13 +449,13 @@ Think of `regexp` and `line` as: "find the line that *looks like this* (starts w
     state: started
     enabled: true
 ```
-**In plain words:** Two separate promises in one task — `state: started` means "it should be running *right now*," and `enabled: true` means "and it should *start itself automatically* the next time this computer reboots," the same way you might flip a light switch on (`started`) while also making sure the switch is wired to turn on automatically every morning (`enabled`).
+Two independent conditions are set in one task: `state: started` means the service process must be running right now; `enabled: true` means systemd (the Linux service manager) must start it automatically on every future boot, without manual intervention.
 
 ```yaml
 - name: Apply pending Apache reloads before testing
   ansible.builtin.meta: flush_handlers
 ```
-**In plain words:** Normally, "only if something changed" reminders (handlers) wait patiently until the very end of the whole chapter before they run. This task is a shortcut that says "actually, run any pending reminders **right now**, don't wait" — because the very next task needs Apache to already be using its newest settings.
+Handlers normally execute once, after every task in the current play has run. `meta: flush_handlers` is a directive that forces any handlers already queued by earlier tasks to run immediately, at this point in the play — necessary here because the verification task that follows needs Apache already running with its final configuration.
 
 ```yaml
 - name: Backend verification
@@ -482,11 +468,8 @@ Think of `regexp` and `line` as: "find the line that *looks like this* (starts w
         return_content: true
       register: apache_local
       failed_when: webpage_marker not in apache_local.content
-    - name: Show backend verification result
-      ansible.builtin.debug:
-        msg: "..."
 ```
-**In plain words:** A `block:` is just a way of grouping several tasks together so you can apply one rule to all of them at once — here, `when: not ansible_check_mode` means "skip this entire group during a dry run, since there's nothing real to check yet." Inside it: visit the webpage yourself, from the same machine, save what came back into a labeled box called `apache_local` (that's what `register` does — "keep the result of this task in a box with this name so a later task can look inside it"), and then **fail on purpose** if the secret marker word isn't found in what came back. `debug` at the end just prints a friendly message so a human reading the output doesn't have to guess whether it worked.
+`block:` groups several tasks so a shared condition (`when:`) applies to all of them at once — here, "skip this entire group during a `--check` dry run, since nothing has actually been deployed yet to check." `uri` performs an HTTP request and can capture the response. `register: apache_local` stores the entire result (status code, response body, headers) in a named variable for later inspection. `failed_when:` overrides Ansible's default success/failure logic with a custom condition — this task is deliberately made to fail if the expected marker text is absent from the response, turning "does the page look approximately right" into an explicit, automatic pass/fail check.
 
 ### The handlers file
 
@@ -502,17 +485,11 @@ Think of `regexp` and `line` as: "find the line that *looks like this* (starts w
     state: reloaded
   listen: Reload Apache
 ```
-**In plain words:** Both of these answer to the same name, `Reload Apache` — that's what `listen:` does. When any task earlier says `notify: Reload Apache`, **both** of these fire, **in the order they're written here** (top to bottom in the file, not the order they got notified). So it always double-checks the settings are valid first, and only *then* actually reloads. `changed_when: false` on the first one means "even though this ran a command, don't count it as 'changing' anything" — it's a check, not an action.
-
-### The two templates, as fill-in-the-blank worksheets
-
-`vhost.conf.j2` and `index.html.j2` both live in a `templates/` folder, and both contain ordinary text with `{{ blanks }}` scattered through it. When Ansible delivers them, every `{{ blank }}` gets replaced with the current value of that sticky note. That's the entire trick behind a template — it's not magic, it's "find and replace," just done automatically and safely.
+`listen: Reload Apache` means both of these handlers respond to the same `notify: Reload Apache` call. When triggered, Ansible runs every handler listening for that name **in the order they appear in this file** — validation first, reload second — regardless of the order in which they were notified elsewhere. `changed_when: false` on the first handler overrides Ansible's default assumption that a `command` task always counts as a change; since this command only checks syntax and never modifies anything, it is explicitly marked as a non-change. `state: reloaded` (as opposed to `restarted`) sends the service a signal to re-read its configuration without terminating existing connections first.
 
 ---
 
-## Part 6 — Milestone 4 — The Certificate Authority, Line by Line
-
-Back to the passport-office analogy from Part 1. This role has exactly two "customers": the Root CA itself (which issues its own passport, since nobody exists above it to issue one *to* it), and the server certificate for `labapp.com` (whose passport the Root CA issues).
+## 8. Milestone 4 — the Certificate Authority Role, Line by Line
 
 ```yaml
 - name: Create the CA working directory (root-only)
@@ -521,7 +498,7 @@ Back to the passport-office analogy from Part 1. This role has exactly two "cust
     state: directory
     mode: "0700"
 ```
-**In plain words:** Build a locked filing cabinet (`/root/lab-pki`) before anything gets put in it. `mode: "0700"` is a permission code meaning "only the owner can even open this drawer — not their group, not anyone else." This is the strictest lock code you'll see in the whole project, because this drawer will hold private keys.
+`mode: "0700"` is the strictest permission setting used anywhere in this project: only the file's owner may read, write, or even list the contents of this directory — not the owner's group, not any other account. This directory will shortly contain unencrypted private keys, so access is restricted as tightly as the filesystem allows.
 
 ```yaml
 - name: Generate the Root CA private key
@@ -531,7 +508,7 @@ Back to the passport-office analogy from Part 1. This role has exactly two "cust
     size: "{{ root_ca_key_size }}"
     mode: "0600"
 ```
-**In plain words:** A "private key" is like a very special signature stamp that can never be copied or faked, and only the office holding it can use it to stamp something official. `type: RSA` and `size: 4096` describe *how strong* the stamp's lock mechanism is — a bigger number means a lock that would take dramatically longer to pick by brute force. `mode: "0600"` means "only the owner can even read this file, not even their own group" — one notch stricter than the folder itself, because a key is the single most sensitive thing in this entire project.
+This generates an RSA key pair and writes the private half to disk. `size: 4096` specifies the key length in bits — a larger key represents a computationally harder problem to break by brute force, at the cost of slightly slower cryptographic operations; 4096 bits is a conservative choice appropriate for a long-lived trust anchor. `mode: "0600"` restricts the file to read/write access by its owner only — one notch stricter even than the containing directory, since this specific file is the single most sensitive artifact in the project.
 
 ```yaml
 - name: Create the Root CA signing request (CA extensions)
@@ -539,18 +516,12 @@ Back to the passport-office analogy from Part 1. This role has exactly two "cust
     path: "{{ pki_dir }}/root-ca.csr"
     privatekey_path: "{{ pki_dir }}/root-ca.key"
     common_name: "{{ root_ca_common_name }}"
-    organization_name: "{{ pki_org }}"
-    country_name: "{{ pki_country }}"
     basic_constraints: ["CA:TRUE", "pathlen:0"]
     basic_constraints_critical: true
     key_usage: [keyCertSign, cRLSign]
     key_usage_critical: true
 ```
-**In plain words:** Before you can stamp a passport, you fill out an *application form* describing exactly what kind of passport this should be. That's what a **CSR** (Certificate Signing Request) is. This particular application says:
-- "This will be the passport OFFICE itself, not a regular citizen" (`CA:TRUE`)
-- "...and this office is not allowed to open a franchise office under itself" (`pathlen:0` — no sub-offices)
-- "...and this office may only ever be used to stamp other passports or say 'this passport is no longer valid,' nothing else" (`keyCertSign, cRLSign`)
-- `_critical: true` on both of those means: "this rule is not optional — any border guard who doesn't understand it must reject the passport entirely, rather than shrug and ignore the rule they don't recognize." It's the difference between a suggestion and a hard requirement.
+A **Certificate Signing Request (CSR)** is a data structure declaring the desired contents and extensions of a certificate, along with the corresponding public key, before it has been signed by anyone. `basic_constraints: ["CA:TRUE", "pathlen:0"]` declares that this certificate is permitted to sign other certificates (`CA:TRUE`), but that any certificate it signs may not itself sign further certificates (`pathlen:0` — a chain depth limit of zero beyond this point). `key_usage: [keyCertSign, cRLSign]` restricts what operations this key is permitted to perform to exactly two: signing certificates, and signing certificate revocation lists. Both constraints are marked `_critical: true`, meaning any certificate-processing software that does not understand a given extension is required by the X.509 standard to reject the certificate outright, rather than silently ignore a restriction it doesn't recognize.
 
 ```yaml
 - name: Self-sign the Root CA certificate
@@ -561,9 +532,9 @@ Back to the passport-office analogy from Part 1. This role has exactly two "cust
     provider: selfsigned
     selfsigned_not_after: "+{{ root_ca_valid_days }}d"
 ```
-**In plain words:** Take that filled-out application, and stamp it using **its own** stamp (`provider: selfsigned`) — because nobody exists above the Root CA to stamp it for it; it has to vouch for itself, which is exactly why everyone has to be *told* to trust it rather than figuring it out automatically. `selfsigned_not_after: "+3650d"` means "this passport expires 3,650 days (10 years) from today."
+`provider: selfsigned` performs the signing operation using the CSR's own private key, rather than a separate issuer's key — the only option available for a Root CA, since by definition nothing exists above it to sign it. `selfsigned_not_after: "+3650d"` sets the certificate's expiration 3,650 days (10 years) from the moment of generation.
 
-The **server certificate** for `labapp.com` follows the exact same three-step dance (key → application form → stamp), with three differences that matter a lot:
+The **server certificate** for `labapp.com` follows the identical two-step process (CSR, then signing), with different, deliberate extension values:
 
 ```yaml
     subject_alt_name: ["DNS:{{ domain_name }}"]
@@ -571,9 +542,7 @@ The **server certificate** for `labapp.com` follows the exact same three-step da
     key_usage: [digitalSignature, keyEncipherment]
     extended_key_usage: [serverAuth]
 ```
-- `subject_alt_name: ["DNS:labapp.com"]` — this is the actual name printed on the passport photo page. A border guard checks *this* against the name of the person standing in front of them, never the office's own name.
-- `CA:FALSE` — "this passport holder is a regular citizen, not an office. They may never stamp anyone else's passport."
-- `serverAuth` — "this passport may only be used to prove 'I am a website server,' nothing else" (a passport meant for one specific purpose, like a work visa instead of a full passport).
+`subject_alt_name` is the field a TLS client actually checks against the hostname it connected to (see §3.4). `basic_constraints: ["CA:FALSE"]` explicitly forbids this certificate from being used to sign anything else — it can only identify a server, never issue further certificates. `extended_key_usage: [serverAuth]` further restricts its permitted use to exactly one purpose: authenticating a TLS server.
 
 ```yaml
 - name: Sign the server certificate with the Root CA
@@ -583,23 +552,21 @@ The **server certificate** for `labapp.com` follows the exact same three-step da
     ownca_privatekey_path: "{{ pki_dir }}/root-ca.key"
     ownca_not_after: "+{{ server_cert_valid_days }}d"
 ```
-**In plain words:** This time, `provider: ownca` means "don't stamp this with its own stamp — stamp it using the *Root CA's* stamp instead" (`ownca_path` and `ownca_privatekey_path` point at the Root CA's own passport and its own private stamp). This is the literal moment the "chain of trust" is created: this certificate, from now on, carries proof that the Root CA specifically vouched for it.
+`provider: ownca` signs this CSR using a *different* certificate's private key — specifically, the Root CA's — rather than signing it with its own key. This is the exact operation that establishes the chain of trust described in §3.3: from this point forward, the resulting certificate carries a signature verifiable against the Root CA's public key.
 
 ```yaml
 - name: Verify the server certificate chains to the Root CA
   ansible.builtin.command: openssl verify -CAfile {{ root_ca_cert_file }} {{ server_cert_file }}
   changed_when: false
 ```
-**In plain words:** This is the border guard's own math check — "does the signature on this passport actually match a real stamp from this specific office?" `changed_when: false` means "this is just a check, not something that modifies anything, so don't count it as a change" — same idea as the Apache config check earlier.
+`openssl verify` performs exactly the mathematical check described in §3.2 — confirming the server certificate's signature is valid against the given Root CA certificate's public key. This is a read-only check, hence `changed_when: false`.
 
-> [!question]- If the Root CA's key is "never copied or faked," what actually stops someone from stealing the file and making fake passports themselves?
-> Nothing about the math stops them — a stolen private key file is just as usable to an attacker as it is to the real owner. That's *entirely* why this project locks it in a `0700` folder with `0600` file permissions, readable only by `root` on one specific machine. The security of the whole system rests on that one file never leaving that one folder. A real production CA takes this much further — keeping the Root CA's key on a device that's physically disconnected from any network most of the time. See [[Milestone 4 — Trust#Remaining limitations|the limitations section]] for how this project is intentionally simpler than that, for lab purposes.
+> [!warning] A real consequence of this design, observed directly in this project
+> Every time the machine holding `pki_dir` is rebuilt from a clean state (no prior files present), this role generates a **completely new** key pair for the Root CA — the *name* `AirNav DAS Lab Root CA` stays the same because it's just a text field, but the underlying cryptographic key is entirely different. Any client that had previously trusted the old Root CA certificate will reject certificates signed by the new one with a signature-verification failure, even though the issuer name matches — because trust was established for a specific key, not a name. This actually happened during this project's own repeatability testing, and required re-importing the newly generated Root CA into the browser used for manual verification.
 
 ---
 
-## Part 7 — Milestone 3 — NGINX, Line by Line
-
-Back to the hotel-receptionist analogy.
+## 9. Milestone 3 — the NGINX Role, Line by Line
 
 ```yaml
 - name: Install NGINX and the SELinux Python bindings used by seboolean
@@ -608,19 +575,7 @@ Back to the hotel-receptionist analogy.
       - "{{ nginx_package }}"
       - python3-libsemanage
 ```
-**In plain words:** Same idea as installing Apache, except this time it's a **list** of two things to install at once (notice the two `- ` dashes under `name:`). The second item, `python3-libsemanage`, isn't NGINX at all — it's a helper tool needed later in this same file, for a completely different task. This is a good example of "install everything a later step will need, right at the start" rather than discovering the gap halfway through.
-
-```yaml
-- name: Create the TLS directories
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: directory
-    mode: "{{ item.mode }}"
-  loop:
-    - { path: "{{ nginx_tls_dir }}", mode: "0755" }
-    - { path: "{{ nginx_tls_dir }}/private", mode: "0700" }
-```
-**In plain words:** `loop:` means "repeat this exact same task once for each item in this list." Instead of writing the same "create a folder" task twice with slightly different details, you write it *once* and hand it a list of two folders to build — a public one that anyone can look inside (`0755`), and a private one that only the owner can even open (`0700`), for the same reason the certificate authority's own folder was locked down: one of these will soon hold a private key.
+A single task can install a list of packages, not just one. `python3-libsemanage` is not NGINX-related software; it is a dependency required by a *different* task later in this same role (the SELinux boolean task below), included here so the entire role's requirements are satisfied at the outset.
 
 ```yaml
 - name: Deploy the server certificate and the CA chain
@@ -632,7 +587,7 @@ Back to the hotel-receptionist analogy.
     - { src: "{{ server_cert_file }}", dest: "{{ nginx_cert_path }}" }
     - { src: "{{ root_ca_cert_file }}", dest: "{{ nginx_chain_path }}" }
 ```
-**In plain words:** This is the one moment in the entire project where a file physically travels from **one computer to another**. `src:` is read from `control-vm3` (where the certificate factory lives), and `dest:` is written on `proxy-vm1`. Everywhere else in this project, files are generated fresh on the same machine that uses them — this is the exception, because the certificate was born somewhere else and needs to be *delivered* here.
+`loop:` executes the same task once per item in a list, substituting `item` with each entry in turn — this avoids writing two nearly identical `copy` tasks by hand. Critically, `src:` in a `copy` task is read from the **control node** (`control-vm3`, where the certificate authority resides), while `dest:` is written on the **managed node** (`proxy-vm1`) — this is the one point in the entire project where a file physically transfers between two different machines, because the certificate was generated on one machine and is required by a different one.
 
 ```yaml
 - name: Deploy the server private key
@@ -642,7 +597,7 @@ Back to the hotel-receptionist analogy.
     mode: "0600"
   no_log: true
 ```
-**In plain words:** Same idea, but for the private key specifically — locked down to `0600` (owner-only) the instant it lands, and `no_log: true` means "never print this task's details to the screen or a log file, even if something goes wrong" — a safety net so a private key can never accidentally end up visible in a terminal transcript someone might screenshot or paste somewhere.
+Identical mechanism, applied to the private key, with `mode: "0600"` (owner-only access) and `no_log: true` — the latter instructs Ansible never to print this task's parameters or results to the console or any log, a safeguard against a private key's contents appearing in a terminal transcript or CI log by accident.
 
 ```yaml
 - name: Deploy nginx.conf (validated with nginx -t before it replaces the live file)
@@ -651,18 +606,7 @@ Back to the hotel-receptionist analogy.
     dest: /etc/nginx/nginx.conf
     validate: nginx -t -c %s
 ```
-**In plain words:** Same fill-in-the-blank idea from Apache, but this file is the **entire** settings file for NGINX, not just one small piece — every server behavior in this project (the redirect, the HTTPS server, the forwarding rules) lives in this one worksheet. `validate: nginx -t -c %s` means: "before saving this over the real file, hand the *almost-saved* version to NGINX's own checker and ask 'would you actually start up correctly with this?' — only overwrite the real file if the answer is yes."
-
-```yaml
-- name: Open HTTP and HTTPS in firewalld
-  ansible.posix.firewalld:
-    port: "{{ item }}/tcp"
-    state: enabled
-  loop:
-    - "{{ proxy_http_port }}"
-    - "{{ proxy_https_port }}"
-```
-**In plain words:** Unlike Apache's locked, one-visitor-only door, these two doors (80 and 443) are meant to be public — this is the "front desk," remember, so anyone should be able to walk up and knock.
+This renders NGINX's **entire** configuration file from one template, rather than a fragment. `validate: nginx -t -c %s` runs NGINX's own syntax and semantic checker against the rendered candidate file *before* it replaces the live one — this check can only meaningfully validate a complete, self-contained configuration, which is why the role manages the whole file rather than a partial snippet.
 
 ```yaml
 - name: Allow NGINX to open connections to the backend (SELinux)
@@ -671,26 +615,16 @@ Back to the hotel-receptionist analogy.
     state: true
     persistent: true
 ```
-**In plain words:** This one needs its own little story. AlmaLinux has an extra security guard on top of the firewall, called **SELinux**, whose entire job is to say "even if you're allowed *in the door*, are you allowed to do *this specific thing* once you're inside?" By default, SELinux does NOT let a web server program open its own outgoing connection to somewhere else — even though NGINX's whole job here is exactly that (calling the kitchen). This task is the specific permission slip that says "yes, this particular kind of program is allowed to relay a connection like this." It's deliberately the *narrowest* permission slip that works — there's a much broader one (`httpd_can_network_connect`) that would also work, but would allow far more than NGINX actually needs, the same way you'd hand someone a key to one specific room instead of a master key to the whole building, even though the master key would also technically open that one room.
+**SELinux** is a mandatory access control system present on RHEL-family distributions (including AlmaLinux) that enforces policy restrictions independent of, and in addition to, standard Unix file permissions. By default, SELinux policy prevents a web-server process from initiating an outbound network connection to another host — even though this is exactly what a reverse proxy must do. `httpd_can_network_relay` is a specific, named policy exception ("boolean") that permits precisely this behavior and nothing broader. A wider boolean (`httpd_can_network_connect`) exists and would also satisfy this requirement, but grants more permission than NGINX actually needs; the narrower boolean is used deliberately, following the security principle of least privilege. `persistent: true` writes the setting so it survives a reboot.
 
-```yaml
-- name: Full path through NGINX on this host (HTTPS -> Apache)
-  ansible.builtin.uri:
-    url: "https://127.0.0.1:{{ proxy_https_port }}/"
-    headers:
-      Host: "{{ domain_name }}"
-    validate_certs: false
-```
-**In plain words:** This test deliberately says `validate_certs: false` — meaning "don't bother checking whether this certificate is trustworthy, I already know it's *technically correct* from Milestone 4, I just want to know whether NGINX successfully forwards the request to Apache and back." Checking whether a *client* trusts it is a completely different question, saved for Milestone 5 on purpose — this test's whole job is narrower than that.
-
-### The NGINX config template, piece by piece
+### The NGINX configuration template
 
 ```nginx
 upstream apache_backend {
     server {{ backend_address }}:{{ backend_port }};
 }
 ```
-**In plain words:** "Give a nickname, `apache_backend`, to 'the kitchen,' whose actual address is filled in from the sticky notes." Everywhere else in this file that says `apache_backend`, it really means "whatever address and port the phone book says web-vm2 is at."
+Defines a named group of one or more backend servers NGINX can forward requests to. `{{ backend_address }}` and `{{ backend_port }}` are substituted from the inventory-derived variables, so this file never contains a hardcoded IP address.
 
 ```nginx
 server {
@@ -699,7 +633,7 @@ server {
     return 301 https://$host$request_uri;
 }
 ```
-**In plain words:** "Anyone who knocks on door 80 asking for `labapp.com` gets told, politely but firmly, 'go to the HTTPS door instead' — here's the exact address to go to." `301` is a numbered code meaning "this redirect is permanent, remember it for next time" (as opposed to a temporary one).
+This server block handles plain HTTP requests (port 80) and responds with an HTTP 301 status code — a **permanent redirect** — to the equivalent HTTPS URL. No content is ever served over the unencrypted connection; its only function is to redirect.
 
 ```nginx
 server {
@@ -717,11 +651,11 @@ server {
     }
 }
 ```
-**In plain words:** "On door 443, use TLS (the `ssl` keyword), and present *this specific* passport and stamp when asked (`ssl_certificate`/`ssl_certificate_key`). For any request that arrives here, forward it to the kitchen nickname we set up earlier, but attach four little notes to the order first" — those `proxy_set_header` lines are literally sticky notes attached to the order ticket, so the kitchen (which never sees the actual guest) still knows: who the real guest is (`X-Real-IP`, `X-Forwarded-For`), what they originally asked for (`Host`), and whether they arrived securely (`X-Forwarded-Proto`). Without these notes, Apache would only ever see "an order came from the receptionist" and nothing about the real guest at all.
+This is the server block that terminates TLS: `listen ... ssl` accepts encrypted connections, and `ssl_certificate` / `ssl_certificate_key` specify which certificate and private key to present during the TLS handshake. `proxy_pass` forwards the (now-decrypted) request to the `apache_backend` group defined earlier. The four `proxy_set_header` lines add HTTP headers to the forwarded request that would otherwise be lost: without them, Apache would only ever observe that a connection arrived from the proxy's own IP address, with no information about the original client, the original hostname requested, or whether the original connection was encrypted. `$remote_addr`, `$proxy_add_x_forwarded_for`, `$host`, and `$scheme` are NGINX's own built-in variables, populated automatically from the incoming connection.
 
 ---
 
-## Part 8 — Milestone 5 — The Client, Line by Line
+## 10. Milestone 5 — the Client Role, Line by Line
 
 ```yaml
 - name: Map {{ domain_name }} to the NGINX proxy in /etc/hosts
@@ -731,7 +665,7 @@ server {
     line: "{{ proxy_address }} {{ domain_name }}"
     backup: true
 ```
-**In plain words:** `/etc/hosts` is a computer's own tiny personal phone book — before it ever asks the internet "where does `labapp.com` live," it checks this file first. This task finds (or adds) exactly one line, the one that ends in `labapp.com`, and sets it to point at the proxy's address. The `regexp` pattern is precise on purpose: `^\S+` means "some non-space characters at the start of the line" (the old address, whatever it was), `\s+` means "then some spaces," and `{{ domain_name }}$` means "then our domain name, and *nothing else*, right up to the end of the line." That precision is what guarantees every *other* line in the file — `localhost`, other computers' names — is left completely alone. `backup: true` means "before changing anything, save a timestamped copy of the whole file first," just in case.
+`/etc/hosts` is a plain-text file consulted by the operating system's name-resolution process before any external DNS server is queried; an entry here maps a hostname directly to an IP address for this specific machine only. The `regexp` pattern is deliberately narrow: `^\S+` matches the address at the start of a line, `\s+` matches the separating whitespace, and `{{ domain_name }}$` requires the line to end exactly with this domain name and nothing else — this ensures only a line that already maps this specific domain gets replaced, and every other line in the file (mapping `localhost` or other hosts) is left untouched. `backup: true` saves a timestamped copy of the file before any modification, independent of Ansible's own change tracking.
 
 ```yaml
 - name: Place the Root CA in the system trust anchors
@@ -740,21 +674,21 @@ server {
     dest: "{{ client_trust_anchor }}"
   notify: Update CA trust
 ```
-**In plain words:** This is the literal moment from the passport-office analogy where you tell the border guard "this office is legitimate, from now on." The certificate file itself gets copied into a specific folder the operating system watches (`/etc/pki/ca-trust/source/anchors/`), and then a handler is notified to actually *update the guard's rulebook* — because just leaving the file in the folder isn't enough on its own, the next task explains why.
+This copies the Root CA's public certificate (never its private key — the private key never leaves the machine that generated it) into a directory the operating system treats as a source of trust anchors.
 
 ```yaml
 - name: Update CA trust
   ansible.builtin.command: update-ca-trust extract
   changed_when: true
 ```
-**In plain words:** The operating system doesn't re-read that folder every time it needs to check a certificate — that would be slow. Instead, it keeps a **pre-compiled summary** of everyone it trusts, rebuilt only when told to. `update-ca-trust extract` is the command that says "rebuild that summary now, using everything currently in the trusted folder." `changed_when: true` here is interesting — normally Ansible decides on its own whether something "changed," but a plain command like this one can't be inspected that way, so this line tells Ansible: "trust me, if this handler runs at all, count it as a real change" (which is true — it only ever runs when the certificate file itself actually changed, since it's a handler).
+Operating systems in the RHEL family do not re-scan the trust-anchor directory on every certificate check, for performance reasons; instead, they maintain a pre-compiled bundle of trusted certificates, rebuilt only on request. `update-ca-trust extract` performs that rebuild. `changed_when: true` is a manual override: because this is a plain `command` task, Ansible cannot inspect its effect automatically, so this line explicitly states "treat this as a change whenever it runs" — which is accurate here, since it only ever runs as a handler triggered by an actual certificate change.
 
 ```yaml
 - name: Resolve {{ domain_name }} through the system resolver (/etc/hosts first)
   ansible.builtin.command: getent hosts {{ domain_name }}
   failed_when: verify_dns.stdout.split()[0] | default('') != proxy_address
 ```
-**In plain words:** `getent hosts` is asking the computer, using the *exact same method* every real program uses (not a special shortcut), "if I wanted to reach `labapp.com` right now, where would I actually be sent?" `.stdout.split()[0]` takes the text answer that came back and grabs just the first word of it (the address), and compares it against what we expect. This is deliberately a stronger test than typing `ping labapp.com` yourself, because it proves the *real resolution path* works, not just that the name exists somewhere.
+`getent hosts` queries the operating system's name resolution mechanism using the exact same code path every application on the system uses — a stronger test than manually reading `/etc/hosts`, since it confirms the resolution actually functions end-to-end, not merely that the file contains the expected text. `.stdout.split()[0]` extracts the first whitespace-separated token from the command's output (the resolved IP address) for comparison against the expected value.
 
 ```yaml
 - name: HTTPS with FULL certificate validation returns the managed page
@@ -766,79 +700,66 @@ server {
     webpage_marker not in verify_https.content or
     verify_https.x_backend_server | default('') != groups['webserver'][0]
 ```
-**In plain words:** This is the test from Milestone 3 finally run *for real*, with `validate_certs: true` this time instead of `false` — meaning "actually check the passport, the way a real border guard would: is the signature genuine, is the office trusted, does the name match?" And then, on top of that, it checks two more things about the actual content that came back: does it contain our secret marker word, *and* does the `X-Backend-Server` header say it really came from `web-vm2` specifically (not some other, wrong machine)? Both conditions must be satisfied, or the whole check fails.
+`validate_certs: true` instructs the `uri` module to perform full certificate validation exactly as a browser would: verifying the signature chain up to a trusted anchor, and checking the requested hostname against the certificate's SAN field. This is the first point in the whole project where that full validation is actually exercised — [[Milestone 3 — Proxy Gateway Role|Milestone 3's]] own test of NGINX deliberately used `validate_certs: false`, since a client's trust configuration doesn't exist yet at that point in the deployment sequence.
 
 ---
 
-## Part 9 — Milestone 6 — Why Running It Twice Proves Anything
+## 11. Milestone 6 — Why Re-Running the Same Command Proves Anything
 
-Go back to the recipe-robot analogy from Part 1. Imagine you hand the robot the same recipe card twice, one after another, for the same kitchen that's already perfectly set up:
+Section 2 established that Ansible tasks describe a desired *state*, and each module checks current state before acting. A direct, testable consequence follows: **running the identical playbook a second time against an already-correctly-configured system should report zero changes**, because every task's precondition check will find the desired state already satisfied.
 
-- **First time:** the robot measures flour, cracks eggs, preheats the oven — a lot of visible activity, because the kitchen started out empty.
-- **Second time:** the robot walks in, looks at the counter, sees the flour is already measured, the eggs are already cracked, the oven is already at the right temperature — and does **nothing**, because every single thing it would have done is already exactly done.
+This is not a hopeful claim — it is a falsifiable prediction that this project actually verified: after a first deployment completed with tasks reporting `changed` results, a second, unmodified run of the same command reported `changed=0` across every task on every host. Any task that *did* report a change on the second run would indicate a design flaw (a task lacking a proper precondition check).
 
-That's what `changed=0` on the second run actually means, in the recipe language: **not** "the robot got lazy," but "the robot checked every single thing, one at a time, and every single thing was already correct." That's a much stronger statement than it sounds like at first.
+**A stronger test extends this idea to detect and correct manual interference.** If a person modifies a managed file by hand, outside of Ansible, the file's actual state now differs from what the playbook declares. Re-running the exact same playbook will find *only that one discrepancy* (since every other file/service/setting is still correct) and correct *only* that one thing — it does not need to be told what changed; it re-derives that by re-checking everything. This was tested directly in this project: a configuration value was changed by hand on `proxy-vm1`, which caused the site to fail; re-running the identical playbook command found and corrected exactly that one file, restoring service, without touching any other component.
 
-Now imagine someone sneaks into the kitchen between the robot's visits and, by hand, swaps the sugar for salt. The next time the robot walks the exact same recipe card, it checks the sugar container, notices "this doesn't match what the recipe says," and fixes **only that one thing** — it doesn't re-crack the eggs or re-preheat the oven, because those are still fine. That's exactly what happened in this project's real drift test: someone (deliberately, as a test) changed one number in NGINX's settings by hand, and re-running the exact same command fixed *only* that one file and reloaded *only* that one service — nothing else was touched, because nothing else was actually wrong.
+**A separate mechanism prevents a different category of failure: a mistake introduced through the playbook itself**, rather than around it. The `validate:` argument used on the Apache and NGINX configuration tasks (§7, §9) tests a candidate configuration file *before* it replaces the live one. If validation fails — for instance, from a typo in a variable that produces an invalid setting — the task fails and the live, working configuration file is left completely untouched. This project verified that behavior directly by deliberately supplying an invalid setting and confirming, via a checksum comparison, that the live configuration file was byte-for-byte identical before and after the failed attempt, and that the site remained available throughout.
 
-And the very last piece — the "validation guard" — is like the robot **reading the recipe card itself out loud before starting**, and refusing to even pick up a single ingredient if the recipe card has an obvious mistake on it, like "bake at -400 degrees." It's a completely different kind of safety than the sugar/salt story: that one catches a person going around the recipe; this one catches a mistake *inside* the recipe itself, before it ever reaches the kitchen.
-
-[[Milestone 6 — Repeatability Check]] has the full, live-reproduced proof of all of this, with real command output.
+Full command output for both of these tests is recorded in [[Milestone 6 — Repeatability Check]].
 
 ---
 
-## Part 10 — The Whole Thing, One More Time, Beginning to End
+## 12. Full Execution, Start to Finish, in Order
 
-Put every analogy together and walk through what actually happens when you type `ansible-playbook site.yml`:
+Running `ansible-playbook site.yml` executes, in this fixed order:
 
-1. **The visitor (control-vm3) checks the street address on all three houses** — confirms they're the right kind of house (AlmaLinux 9) and that the instructions written down make sense (real-looking domain name, real port numbers). If either check fails, stop immediately rather than build on a bad foundation.
-2. **The visitor visits the passport office** (which happens to also be their own house) and, if there isn't already a legitimate office and a legitimate passport for `labapp.com`, builds both from scratch: an office stamp (Root CA key), the office's own passport (Root CA cert), a citizen's stamp application (server CSR), and the finished, office-stamped passport (server cert).
-3. **The visitor walks to House 2 (web-vm2)** and sets up the kitchen: installs Apache, moves it to the back-hallway door (port 8080), writes the actual menu (the webpage), and installs a lock on the back hallway that only lets House 1 through.
-4. **The visitor walks to House 1 (proxy-vm1)** and sets up the front desk: installs NGINX, delivers the passport and stamp the office just made, writes the front-desk rulebook (`nginx.conf`) that says "redirect plain requests to the secure door, and forward secure requests down the hallway to the kitchen," opens the two public doors (80 and 443), and gets the extra security guard's (SELinux's) permission for the receptionist to actually use that hallway.
-5. **The visitor goes back home (control-vm3, as a client this time)** and does two things: writes "House 1's address" next to `labapp.com` in their own personal phone book, and tells their own border-guard rulebook "the passport office from step 2 is legitimate, trust its stamps from now on."
-6. **The visitor then personally tests the entire path themselves**, exactly the way a real guest would: look up the name, check the trust rule is really in place, knock on the plain door and confirm it redirects, knock on the secure door with full passport-checking turned on, and confirm the food that comes back is really the one from the House 2 menu.
+1. **Validation** — every machine is checked against required conditions (correct operating system, sane configuration values). Execution halts immediately if any check fails, rather than applying partial configuration to a system that doesn't meet prerequisites.
+2. **Certificate authority creation** — on `control-vm3`: a Root CA key pair and self-signed certificate are generated (if not already present and valid), followed by a key pair, CSR, and CA-signed certificate for `labapp.com`.
+3. **Backend deployment** — on `web-vm2`: Apache is installed, moved to port 8080, given a virtual host configuration and the actual page content, and firewalled to accept connections only from `proxy-vm1`'s address.
+4. **Proxy deployment** — on `proxy-vm1`: NGINX is installed, the certificate and key from step 2 are delivered to it, a complete NGINX configuration is generated and validated before being applied, the necessary firewall ports are opened, and the SELinux policy exception required for proxying is granted.
+5. **Client configuration and verification** — on `control-vm3`, acting as a client: `labapp.com` is mapped to the proxy's address in `/etc/hosts`, the Root CA is installed as a trust anchor and the system trust bundle is rebuilt, and then a sequence of independent checks is executed: name resolution, presence of the CA in the trust store, the HTTP-to-HTTPS redirect, and a fully-validated HTTPS request confirming the response actually originated from `web-vm2` by way of `proxy-vm1`.
 
-Every single step above checks what's already true before acting, which is why doing the whole thing again, unchanged, does nothing — and why breaking one small piece by hand only ever costs you a fix to that one piece.
+Each of these steps only performs work where the current state differs from the declared desired state, which is the property demonstrated and tested in §11.
 
 ---
 
-## Part 11 — Glossary
+## 13. Glossary
 
-| Term | One-sentence meaning |
+| Term | Definition |
 | --- | --- |
-| **Ansible** | The recipe-reading robot: agentless (installs nothing on the machines it manages), connects over SSH, and only acts on differences between what's asked for and what's already true. |
-| **Control node** | The computer running the robot. |
-| **Managed node** | A computer the robot is allowed to change. |
-| **Inventory** | The phone book of managed computers and the teams (groups) they're in. |
-| **Group** | A named team inside the phone book. |
-| **Playbook** | The whole day's to-do list, written in YAML. |
-| **Play** | One chapter of that list, aimed at one team. |
-| **Task** | One instruction inside a chapter. |
-| **Module** | The actual tool a task uses (`dnf`, `template`, `service`, ...). |
-| **Variable** | A named, reusable value — a sticky note. |
-| **Fact** | A value Ansible learned by actually asking a machine, not by being told. |
-| **Template** | A fill-in-the-blank worksheet (`.j2` file) with `{{ blanks }}`. |
-| **Handler** | A task that only runs if something earlier actually changed. |
-| **Role** | A folder bundling everything (tasks, handlers, templates, defaults) for one job. |
-| **Idempotent** | "Doing this again causes no harm, because it checks first." |
-| **`validate:`** | "Test the almost-finished file before replacing the real one." |
-| **`--check`** | A dry run: report what would change, change nothing. |
-| **`--diff`** | Show the actual before/after lines of a changed file. |
-| **YAML** | The indentation-based format Ansible files are written in. |
-| **Root CA** | A self-vouching "passport office" that everyone agrees to trust directly. |
-| **Server certificate** | A "passport" issued by the Root CA, proving a specific website's identity. |
-| **SAN (Subject Alternative Name)** | The actual name printed on the passport that a visitor's name gets checked against. |
-| **Trust store / trust anchor** | The list of passport offices a specific computer has agreed to trust. |
-| **Chain of trust** | The proof that a specific passport was really stamped by a specific, trusted office. |
-| **Reverse proxy** | The receptionist: the only thing a real visitor talks to directly. |
-| **TLS termination** | The point where an encrypted (HTTPS) connection ends and becomes a plain one behind the scenes — here, at NGINX. |
-| **Firewalld / firewall rule** | The locked door — who's allowed to knock, on which specific door. |
-| **SELinux** | The extra guard who checks "are you allowed to do *this*, even though you're already inside?" |
-| **SELinux boolean** | One specific permission slip that guard can be handed. |
+| **Idempotent** | A task whose repeated execution with unchanged inputs produces no further change, because it checks current state before acting. |
+| **Control node / managed node** | The machine running Ansible / a machine Ansible configures. |
+| **Inventory / group** | The list of managed machines / a named subset of that list. |
+| **Playbook / play / task** | The full ordered instruction set / one section targeting one group / one instruction within it. |
+| **Module** | A program implementing one idempotent operation, executed remotely by Ansible. |
+| **Variable / fact** | A named, substitutable value / a variable populated by inspecting a machine directly. |
+| **Template (Jinja2)** | A text file with `{{ variable }}` placeholders, rendered before delivery. |
+| **Handler** | A task that only runs when explicitly notified by a change elsewhere in the same play. |
+| **Role / collection** | A packaged directory of tasks for one component / a distributable package of additional modules. |
+| **X.509 certificate** | A structured data file binding a subject, a public key, and an issuer's signature together. |
+| **Private key / public key** | The secret half of an asymmetric key pair, never shared / the shareable half, used to verify signatures made with the private half. |
+| **Digital signature** | Mathematical proof that specific data was signed by a specific private key and has not been altered since. |
+| **CSR (Certificate Signing Request)** | An unsigned declaration of a certificate's desired contents, submitted for signing. |
+| **Root CA** | A self-signed certificate explicitly configured as a trust anchor, from which a chain of trust originates. |
+| **Chain of trust** | The sequence of signature verifications connecting a presented certificate back to a trusted anchor. |
+| **Trust anchor / trust store** | A certificate explicitly trusted by policy / the collection of such certificates on a given system. |
+| **SAN (Subject Alternative Name)** | The certificate field listing hostnames it may validly identify, checked separately from signature validity. |
+| **Reverse proxy** | A server that receives client requests on behalf of backend servers and forwards them internally. |
+| **TLS termination** | The point at which an encrypted connection is decrypted back to plaintext, typically at a reverse proxy. |
+| **Firewalld / rich rule** | The Linux firewall service / a firewall rule with conditions more specific than a plain port toggle. |
+| **SELinux / boolean** | A mandatory access control system enforcing policy beyond file permissions / a named, toggleable policy exception. |
+| **`validate:`** | An Ansible template/file argument that tests a candidate file's correctness before it replaces the live one. |
+| **`--check` / `--diff`** | Run Ansible without making changes, reporting what would happen / show the exact before/after content of a changed file. |
 
 ---
 
-> [!success] What to do with this note
-> You don't need to memorize any of this. Come back to it whenever a term from the other milestone notes feels fuzzy, re-read the matching analogy, and move on. Understanding builds the same way idempotency works: check what you already know, and only spend effort on the part that's actually still missing.
-
-See [[OLIVERIO — Deployment Automation]] for the tested, full technical guide, and the six milestone notes ([[Milestone 1 — Project Hangar]], [[Milestone 2 — Web Server Role]], [[Milestone 4 — Trust]], [[Milestone 3 — Proxy Gateway Role]], [[Milestone 5 — Client Landing Zone]], [[Milestone 6 — Repeatability Check]]) for the live, audited evidence that everything explained here actually works.
+See [[OLIVERIO — Deployment Automation]] for the complete, tested technical guide, and the six milestone notes ([[Milestone 1 — Project Hangar]], [[Milestone 2 — Web Server Role]], [[Milestone 4 — Trust]], [[Milestone 3 — Proxy Gateway Role]], [[Milestone 5 — Client Landing Zone]], [[Milestone 6 — Repeatability Check]]) for the live, audited evidence that everything explained here was actually verified working.
