@@ -348,40 +348,35 @@ Step-by-step through the Anaconda installer:
 > | **RAM** | 1280 MB |
 
 #### Step A: OS Installer — Network & Hostname Screen
-Inside the installer under **Network & Host Name**:
-1. Toggle the network adapter **ON** (slide the Ethernet button to ON).
-2. Click **Configure** → **IPv4 Settings**:
-   - **Method**: `Manual`
-   - **Address**: `192.168.100.41`
-   - **Netmask**: `255.255.255.0` (or `/24`)
-   - **Gateway**: `192.168.100.1`
-   - **DNS Servers**: `192.168.100.1,8.8.8.8`
-3. Set **Hostname** at the bottom: `proxy-vm1`
-4. Click **Apply** → **Done**.
+> [!important] Crucial Lab Gateway Discovery
+> On your Proxmox physical bridge (`vmbr0`), the real internet default gateway is **`192.168.107.1`** via DHCP (there is no router at `192.168.100.1`).
+> In Phase 2, your VMs ran **DHCP for internet** (`192.168.107.x`) + **Static IP for the lab** (`192.168.100.x`).
+>
+> **The Easiest Installer Configuration:**
+> 1. Toggle the network adapter **ON**.
+> 2. Leave **IPv4 Settings** on **Automatic (DHCP)**! (This automatically acquires internet access, gateway `192.168.107.1`, and DNS).
+> 3. Set **Hostname** at the bottom: `proxy-vm1`
+> 4. Click **Apply** → **Done**.
 
-#### Step B: Post-Install Network & Hosts Configuration (SSH from your laptop)
-After AlmaLinux boots, SSH in from your laptop and finalize setup:
-
-> [!important] If You Already Installed `proxy-vm1` with `192.168.100.20`:
-> If you already configured `192.168.100.20` during the installer, run this one-line command inside `proxy-vm1` (via Proxmox Console or SSH) to switch its static IP to `192.168.100.41`:
-> ```bash
-> nmcli con mod ens18 ipv4.addresses 192.168.100.41/24 && nmcli con up ens18
-> ```
-> This guarantees all Phase 3 VMs (`.40`, `.41`, `.42`) use completely unique, conflict-free IPs with fresh host keys!
+#### Step B: Post-Install Network & Hosts Configuration
+Log into `proxy-vm1` (via Proxmox Console or SSH) and run this clean script to bind your static lab IP and test internet:
 
 ```bash
-# SSH in from your management laptop:
-ssh root@192.168.100.41
+# 1. Bind your static lab IP while keeping DHCP internet gateway active:
+nmcli con mod ens18 ipv4.method auto ipv4.addresses 192.168.100.41/24
+nmcli con up ens18
 
+# 2. Verify both IPs are present:
+ip addr show ens18 | grep "inet "
+# Expected:
+#   inet 192.168.107.xxx/24 ... (DHCP Internet)
+#   inet 192.168.100.41/24 ...  (Static Lab IP)
 
-# 1. Verify static IP is correct:
-ip addr show ens18
-
-# 2. Set the hostname definitively:
+# 3. Set the hostname definitively:
 hostnamectl set-hostname proxy-vm1
 echo "proxy-vm1" > /etc/hostname
 
-# 3. Write /etc/hosts with all 3 Phase 3 nodes:
+# 4. Write /etc/hosts with all 3 Phase 3 nodes:
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
@@ -392,14 +387,13 @@ cat << 'EOF' > /etc/hosts
 192.168.100.10 laptop
 EOF
 
-# 4. Install essential tools:
+# 5. Verify internet connectivity (should respond with 0% packet loss):
+ping -c 2 8.8.8.8
+
+# 6. Install essential tools (dnf now works immediately!):
 dnf install -y tar curl openssl wget
 
-# 5. Verify connectivity:
-ping -c 2 192.168.100.1
-curl -sI https://example.com | head -n 1
-
-echo "✅ proxy-vm1 ready!"
+echo "✅ proxy-vm1 is online and fully configured!"
 ```
 
 ---
@@ -416,30 +410,30 @@ echo "✅ proxy-vm1 ready!"
 > | **RAM** | 1280 MB |
 
 #### Step A: OS Installer — Network & Hostname Screen
-Inside the installer under **Network & Host Name**:
 1. Toggle the network adapter **ON**.
-2. Click **Configure** → **IPv4 Settings**:
-   - **Method**: `Manual`
-   - **Address**: `192.168.100.42`
-   - **Netmask**: `255.255.255.0` (or `/24`)
-   - **Gateway**: `192.168.100.1`
-   - **DNS Servers**: `192.168.100.1,8.8.8.8`
+2. Leave **IPv4 Settings** on **Automatic (DHCP)**! (Automatically acquires internet access, gateway `192.168.107.1`, and DNS).
 3. Set **Hostname** at the bottom: `web-vm2`
 4. Click **Apply** → **Done**.
 
 #### Step B: Post-Install Network & Hosts Configuration
+Log into `web-vm2` (via Proxmox Console or SSH from your laptop) and run:
+
 ```bash
-# SSH in from your management laptop:
-ssh root@192.168.100.42
+# 1. Bind your static lab IP while keeping DHCP internet gateway active:
+nmcli con mod ens18 ipv4.method auto ipv4.addresses 192.168.100.42/24
+nmcli con up ens18
 
-# 1. Verify static IP is correct:
-ip addr show ens18
+# 2. Verify both IPs are present:
+ip addr show ens18 | grep "inet "
+# Expected:
+#   inet 192.168.107.xxx/24 ... (DHCP Internet)
+#   inet 192.168.100.42/24 ...  (Static Lab IP)
 
-# 2. Set the hostname definitively:
+# 3. Set the hostname definitively:
 hostnamectl set-hostname web-vm2
 echo "web-vm2" > /etc/hostname
 
-# 3. Write /etc/hosts with all 3 Phase 3 nodes:
+# 4. Write /etc/hosts with all 3 Phase 3 nodes:
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
@@ -450,13 +444,13 @@ cat << 'EOF' > /etc/hosts
 192.168.100.10 laptop
 EOF
 
-# 4. Install essential tools:
+# 5. Verify internet connectivity:
+ping -c 2 8.8.8.8
+
+# 6. Install essential tools:
 dnf install -y tar curl openssl wget
 
-# 5. Verify connectivity:
-ping -c 2 192.168.100.41
-
-echo "✅ web-vm2 ready!"
+echo "✅ web-vm2 is online and ready!"
 ```
 
 ---
@@ -473,30 +467,30 @@ echo "✅ web-vm2 ready!"
 > | **RAM** | 1280 MB |
 
 #### Step A: OS Installer — Network & Hostname Screen
-Inside the installer under **Network & Host Name**:
 1. Toggle the network adapter **ON**.
-2. Click **Configure** → **IPv4 Settings**:
-   - **Method**: `Manual`
-   - **Address**: `192.168.100.40`
-   - **Netmask**: `255.255.255.0` (or `/24`)
-   - **Gateway**: `192.168.100.1`
-   - **DNS Servers**: `192.168.100.1,8.8.8.8`
+2. Leave **IPv4 Settings** on **Automatic (DHCP)**! (Automatically acquires internet access, gateway `192.168.107.1`, and DNS).
 3. Set **Hostname** at the bottom: `control-vm3`
 4. Click **Apply** → **Done**.
 
 #### Step B: Post-Install Network & Hosts Configuration
+Log into `control-vm3` (via Proxmox Console or SSH from your laptop) and run:
+
 ```bash
-# SSH in from your management laptop:
-ssh root@192.168.100.40
+# 1. Bind your static lab IP while keeping DHCP internet gateway active:
+nmcli con mod ens18 ipv4.method auto ipv4.addresses 192.168.100.40/24
+nmcli con up ens18
 
-# 1. Verify static IP is correct:
-ip addr show ens18
+# 2. Verify both IPs are present:
+ip addr show ens18 | grep "inet "
+# Expected:
+#   inet 192.168.107.xxx/24 ... (DHCP Internet)
+#   inet 192.168.100.40/24 ...  (Static Lab IP)
 
-# 2. Set the hostname definitively:
+# 3. Set the hostname definitively:
 hostnamectl set-hostname control-vm3
 echo "control-vm3" > /etc/hostname
 
-# 3. Write /etc/hosts with all 3 Phase 3 nodes:
+# 4. Write /etc/hosts with all 3 Phase 3 nodes:
 cat << 'EOF' > /etc/hosts
 127.0.0.1   localhost localhost.localdomain
 ::1         localhost localhost.localdomain
@@ -507,14 +501,17 @@ cat << 'EOF' > /etc/hosts
 192.168.100.10 laptop
 EOF
 
-# 4. Install essential tools:
+# 5. Verify internet connectivity:
+ping -c 2 8.8.8.8
+
+# 6. Install essential tools:
 dnf install -y tar curl openssl wget
 
-# 5. Verify you can reach both managed nodes:
-ping -c 2 192.168.100.41   # should reach proxy-vm1
-ping -c 2 192.168.100.42   # should reach web-vm2
+# 7. Verify you can reach both managed nodes over the private lab network:
+ping -c 2 192.168.100.41   # reaches proxy-vm1
+ping -c 2 192.168.100.42   # reaches web-vm2
 
-echo "✅ control-vm3 ready as Ansible Control Node!"
+echo "✅ control-vm3 is online and ready as Ansible Control Node!"
 ```
 
 ---
