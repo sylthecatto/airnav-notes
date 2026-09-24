@@ -66,7 +66,7 @@ flowchart TD
 | `control-vm3` | **106** | Ansible Control Node & Client | `192.168.100.30/24` | GW: `192.168.100.1` | 2 vCPU / 1280 MB / 20 GB |
 | `proxy-vm1` | **104** | NGINX Reverse Proxy Gateway | `192.168.100.20/24` | GW: `192.168.100.1` | 1 vCPU / 1280 MB / 15 GB |
 | `web-vm2` | **105** | Backend Apache Web Server | `192.168.100.22/24` | GW: `192.168.100.1` | 1 vCPU / 1280 MB / 15 GB |
-| *(Cold Backup)* `proxy-vm1` | 102 | Phase 2 Proxy (Preserved on Disk) | (Powered Off) | - | Preserved |
+| *(Cold Backup)* `proxy01` | 102 | Phase 2 Proxy (Preserved on Disk) | (Powered Off) | - | Preserved |
 | *(Cold Backup)* `proxy02` | 103 | Phase 2 HA Backup (Preserved on Disk) | (Powered Off) | - | Preserved |
 | *(Cold Backup)* `appvm` | 101 | Phase 2 App (Preserved on Disk) | (Powered Off) | - | Preserved |
 | *(Cold Backup)* `dbvm` | 100 | Phase 2 DB (Preserved on Disk) | (Powered Off) | - | Preserved |
@@ -362,9 +362,13 @@ Inside the installer under **Network & Host Name**:
 #### Step B: Post-Install Network & Hosts Configuration (SSH from your laptop)
 After AlmaLinux boots, SSH in from your laptop and finalize setup:
 
+> [!tip] Stale Host Key Notice (Automated Fix Already Applied)
+> Because `proxy-vm1` reuses the IP `192.168.100.20`, an SSH client will normally detect a new host fingerprint and show `REMOTE HOST IDENTIFICATION HAS CHANGED!`. To clear the old Phase 2 key, the command is `ssh-keygen -R 192.168.100.20`. *(This has already been run on your laptop, so your connection will proceed smoothly!)*
+
 ```bash
 # SSH in from your management laptop:
 ssh root@192.168.100.20
+
 
 # 1. Verify static IP is correct:
 ip addr show ens18
