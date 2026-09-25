@@ -1521,6 +1521,19 @@ scp -r ~/ansible-platform root@192.168.100.40:/root/
 > [!tip] Before the demo
 > The same three steps give you a guaranteed-clean stage. You can also snapshot the **converged** state (`qm snapshot 104 phase3-deployed` …) as a fast fallback during the presentation.
 
+> [!warning] "Fresh install" is not the same snapshot as "clean baseline" — pick the right one
+> Each VM actually has two earlier snapshots, and only one of them supports the flow above:
+>
+> | Snapshot | What it has | Works with "just scp the project back and run it"? |
+> | --- | --- | --- |
+> | `freshInstall` | Bare AlmaLinux, right after the OS installer finished — no SSH keys exchanged, no `ansible-core` on control-vm3 | **No** — you'd first have to redo §3.0's preconditions (generate the SSH keypair, `ssh-copy-id` to both managed nodes, install `ansible-core`) before the project would even connect |
+> | `phase3-clean` | OS + the SSH keypair already exchanged + `ansible-core` already installed on control-vm3, project folder empty | **Yes** — this is the snapshot every command above rolls back to |
+>
+> If a demo plan says "roll back to the fresh install snapshot," confirm out loud that it means `phase3-clean` before running `qm rollback` — rolling back to the literal `freshInstall` snapshot instead will leave control-vm3 unable to reach the other two VMs at all until the SSH setup is repeated by hand.
+
+> [!success] Laptop-side backup verified current (2026-09-25)
+> `~/ansible-platform` on the laptop was compared file-by-file (checksums, not just names) against the live, working project on control-vm3 — **identical**, with every fix from every milestone already included. The only difference found was a stray `.site.yml.swp` vim leftover on control-vm3, which has been removed; it was never part of the project and would not have been copied by `scp -r` regardless. Re-run the same checksum comparison after any further hand-edits on control-vm3, before trusting the laptop copy for a demo.
+
 > [!warning] Snapshotting a running VM without a guest-agent freeze
 > `phase3-clean` on control-vm3 was rebuilt once already because of this: deleting files and then immediately snapshotting a *running* VM (guest filesystem freeze disabled) can capture the disk **before** the guest has flushed the delete to the virtual block device — the snapshot silently keeps the old files. The fix is to run `sync; sync` on the guest right before taking the snapshot. If you ever rebuild this baseline yourself, do the same.
 
