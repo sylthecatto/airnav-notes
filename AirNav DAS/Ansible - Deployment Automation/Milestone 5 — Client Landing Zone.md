@@ -145,17 +145,27 @@ If you personally want to *look at* `https://labapp.com` in an ordinary GUI brow
 - Every time control-vm3 is rebuilt from a clean snapshot, the `pki_ca` role generates a **new** Root CA key pair (same name, different key), because there is nothing left on disk to preserve.
 - A browser that trusted the *previous* Root CA will reject the *new* one with a signature-verification error (`SEC_ERROR_BAD_SIGNATURE` in Firefox-family browsers) — it recognizes the name, but the key underneath it no longer matches.
 
-`refresh-local-trust.sh`, in this same folder, automates re-syncing this for **Chromium and other NSS-aware browsers** on Linux, which read a shared certificate database at `~/.pki/nssdb`:
+`refresh-local-trust.sh`, in this same folder, automates re-syncing this. Its primary target is **Zen Browser** (a Firefox fork): unlike Chromium, Firefox-family browsers keep their certificate database *per profile* rather than in one shared system location, so the script locates every Zen profile automatically (by reading `profiles.ini`, the same file Zen itself reads to know where its profiles live) and updates each one directly with `certutil` — the identical tool Firefox uses internally to manage that database.
 
 ```bash
 ./refresh-local-trust.sh                 # defaults to control-vm3 at 192.168.100.40
 ./refresh-local-trust.sh 192.168.100.40  # or pass the address explicitly
 ```
 
-It fetches the *current* `root-ca.crt` from control-vm3, removes any previously trusted certificate under the same name (since NSS does not automatically replace one nickname with another key), and imports the current one — with no GUI dialog involved. Re-running it after every VM rebuild keeps Chromium in sync automatically.
+**Close Zen Browser completely before running it.** Firefox-family browsers hold their certificate database open while running, and changes written to it while the browser is still open can be silently discarded the next time you close it normally.
 
-> [!warning] This does not cover Zen Browser (or any other Firefox-family browser)
-> Firefox-family browsers, Zen Browser included, keep their own private certificate database per profile and never read `~/.pki/nssdb`. There is no way to script around this from outside the browser itself. For those browsers, the manual steps still apply after every CA regeneration: Settings → Privacy & Security → Certificates → View Certificates → Authorities → delete the old **"AirNav DAS Lab Root CA"** entry → Import the freshly fetched `root-ca.crt` → tick "Trust this CA to identify websites."
+If automatic discovery doesn't find your profile (installs vary in exactly where `profiles.ini` ends up), the script prints the exact fix rather than failing silently:
+
+```bash
+ZEN_PROFILE_DIR="<path from about:support>" ./refresh-local-trust.sh
+```
+
+Find that path from inside Zen itself: address bar → `about:support` → **Profile Folder** → **Open Folder**.
+
+As a bonus, it also refreshes the shared NSS database at `~/.pki/nssdb` if one exists on the machine, which covers Chromium and other NSS-aware apps at no extra cost — harmless if none are installed.
+
+> [!success] Tested against a real Firefox-format certificate database
+> Both the profile auto-discovery (parsing a `profiles.ini` and resolving a relative `Path=` entry, exactly as a real Zen install lays one out) and the certutil import itself were verified end to end against an actual NSS certificate database built with `certutil -N` — confirmed trusted afterward with `Certificate Trust Flags: SSL Flags: Valid CA, Trusted CA`, the identical flags Firefox itself checks. What could not be verified directly is the *exact* profile path on this specific machine's real Zen install, since that path isn't visible outside the browser's own process — hence the `ZEN_PROFILE_DIR` override and the `about:support` instructions above.
 
 ---
 

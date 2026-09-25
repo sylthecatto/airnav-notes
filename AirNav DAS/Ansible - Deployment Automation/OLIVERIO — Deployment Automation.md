@@ -1703,8 +1703,8 @@ Reset first ([[#8.1 Reset to clean prepared VMs]]), then follow this script:
 > This is outside the spec — the client the assignment cares about is control-vm3, which already trusts the CA automatically via [[Milestone 5 — Client Landing Zone]]. This is purely a visual for your own laptop, unrelated to grading.
 >
 > 1. On the laptop, add `192.168.100.41 labapp.com` to `/etc/hosts` (remove any older line for the same name — two entries for one hostname resolves to whichever comes first, which can silently point at a stale address).
-> 2. For **Chromium** and other browsers that read the shared Linux NSS certificate store: run `refresh-local-trust.sh` (in this same vault folder) — it fetches the current CA from control-vm3 and imports it with no GUI step. Re-run it any time the CA is regenerated (e.g. after a clean-VM rollback).
-> 3. For **Firefox-family browsers (including Zen Browser)**: these keep a separate, per-profile certificate store the script above cannot reach. Import manually: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import → pick the CA the script just fetched to `~/Downloads/airnav-lab-root-ca.crt` → tick "Trust this CA to identify websites." Repeat this manual step after every CA regeneration.
+> 2. Close **Zen Browser** (or whatever Firefox-family browser you use), then run `refresh-local-trust.sh` (in this same vault folder). It fetches the current CA from control-vm3, auto-detects your Zen profile via `profiles.ini`, and imports the CA directly into it with `certutil` — no GUI dialog. It also refreshes the shared NSS store used by Chromium-family browsers, if one exists, at no extra cost. Re-run it any time the CA is regenerated (e.g. after a clean-VM rollback).
+> 3. If it can't find your profile automatically, it prints the exact fix: get the real path from Zen's address bar (`about:support` → Profile Folder → Open Folder), then re-run as `ZEN_PROFILE_DIR="<that path>" ./refresh-local-trust.sh`.
 
 ---
 
