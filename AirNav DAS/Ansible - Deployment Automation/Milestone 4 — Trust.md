@@ -18,7 +18,7 @@ status: audited — correct, verified live
 # Milestone 4 — Trust
 
 > [!abstract] What this milestone actually is
-> Everything HTTPS depends on is created here, before HTTPS itself exists: a **Root CA** (a certificate that signs other certificates) and a **server certificate for `labapp.com`**, signed by that Root CA. Nothing is deployed to the proxy yet — this milestone only *creates* the trust material on the control node. See [[OLIVERIO — Deployment Automation#2.7 · Build order vs milestone numbers]] for why this has to exist before NGINX's role can even pass its own config check.
+> Everything HTTPS depends on is created here, before HTTPS itself exists: a **Root CA** (a certificate that signs other certificates) and a **server certificate for `labapp.com`**, signed by that Root CA. Nothing is deployed to the proxy yet — this milestone only *creates* the trust material on the control node. See [[OLIVERIO — Deployment Automation#2.7 Build order vs milestone numbers]] for why this has to exist before NGINX's role can even pass its own config check.
 
 > [!success] Audit result
 > Checked `roles/pki_ca/` on `control-vm3` against [[OLIVERIO — Deployment Automation#5 · Milestone 4 — Trust (Internal PKI)]] — exact match. Ran the role live and inspected every file it produced with `openssl` directly, independently of what the playbook itself reported. Root CA extensions, server cert extensions, SAN, key sizes, validity windows, file permissions, chain verification, and key/cert matching all came back correct. No corrections needed.

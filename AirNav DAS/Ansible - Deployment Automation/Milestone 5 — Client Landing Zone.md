@@ -61,7 +61,7 @@ The `regexp` matches **only** a line that ends in `labapp.com` — nothing about
 dest: "{{ client_trust_anchor }}"
 ```
 
-Notice this variable isn't hard-coded in the task — it comes from `group_vars/client.yml`, which sets it to `airnav-das-lab-root-ca.crt`, overriding the role's own generic default of `lab-root-ca.crt` in `roles/client_trust/defaults/main.yml`. That's [[Milestone 1 — Project Hangar#1.4 Variables and precedence|variable precedence]] working exactly as designed: the group-specific value wins. Confirmed live — the file that actually landed on disk is named `airnav-das-lab-root-ca.crt`, matching the group_vars override, not the role default.
+Notice this variable isn't hard-coded in the task — it comes from `group_vars/client.yml`, which sets it to `airnav-das-lab-root-ca.crt`, overriding the role's own generic default of `lab-root-ca.crt` in `roles/client_trust/defaults/main.yml`. That's [[OLIVERIO — Deployment Automation#1.4 Variables and precedence|variable precedence]] working exactly as designed: the group-specific value wins. Confirmed live — the file that actually landed on disk is named `airnav-das-lab-root-ca.crt`, matching the group_vars override, not the role default.
 
 ### 3. `update-ca-trust extract` — a handler, not a task
 
@@ -132,6 +132,30 @@ Every line here corresponds to one of the checks above — this isn't a separate
 | [[Milestone 2 — Web Server Role]] | the `X-Backend-Server` header | checked automatically here as the final proof the request reached the right backend, not just *a* backend |
 
 None of the earlier milestones' verification steps used full certificate validation, by design — each one tested only what it could prove on its own, without depending on client configuration that didn't exist yet. Milestone 5 is where all of it becomes provable together, in the way a real user's browser would actually experience it.
+
+---
+
+## Scope note: this is the entire graded requirement — a personal laptop is not
+
+> [!important] The Root CA does not need to be installed anywhere except the client VM
+> "Make the Root CA certificate available from the client host" refers to **control-vm3**, which is the `client` group member in this project's own inventory. That's exactly what `client_trust`'s "Place the Root CA in the system trust anchors" task above does, automatically, on every run. Nothing about the assignment requires trusting the CA on the physical laptop you happen to be typing on — that machine isn't part of the three-VM platform at all.
+
+If you personally want to *look at* `https://labapp.com` in an ordinary GUI browser on your own laptop — purely for your own visual confirmation, not for grading — that laptop is outside Ansible's inventory, so nothing here configures it automatically. Two consequences follow directly from how [[Milestone 4 — Trust|Milestone 4]] builds the certificate authority (see also [[OLIVERIO — Deployment Automation#8.7 Remaining limitations (be honest in the defense)|the project's remaining limitations]]):
+
+- Every time control-vm3 is rebuilt from a clean snapshot, the `pki_ca` role generates a **new** Root CA key pair (same name, different key), because there is nothing left on disk to preserve.
+- A browser that trusted the *previous* Root CA will reject the *new* one with a signature-verification error (`SEC_ERROR_BAD_SIGNATURE` in Firefox-family browsers) — it recognizes the name, but the key underneath it no longer matches.
+
+`refresh-local-trust.sh`, in this same folder, automates re-syncing this for **Chromium and other NSS-aware browsers** on Linux, which read a shared certificate database at `~/.pki/nssdb`:
+
+```bash
+./refresh-local-trust.sh                 # defaults to control-vm3 at 192.168.100.40
+./refresh-local-trust.sh 192.168.100.40  # or pass the address explicitly
+```
+
+It fetches the *current* `root-ca.crt` from control-vm3, removes any previously trusted certificate under the same name (since NSS does not automatically replace one nickname with another key), and imports the current one — with no GUI dialog involved. Re-running it after every VM rebuild keeps Chromium in sync automatically.
+
+> [!warning] This does not cover Zen Browser (or any other Firefox-family browser)
+> Firefox-family browsers, Zen Browser included, keep their own private certificate database per profile and never read `~/.pki/nssdb`. There is no way to script around this from outside the browser itself. For those browsers, the manual steps still apply after every CA regeneration: Settings → Privacy & Security → Certificates → View Certificates → Authorities → delete the old **"AirNav DAS Lab Root CA"** entry → Import the freshly fetched `root-ca.crt` → tick "Trust this CA to identify websites."
 
 ---
 

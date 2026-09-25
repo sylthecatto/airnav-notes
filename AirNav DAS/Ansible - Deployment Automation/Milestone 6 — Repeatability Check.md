@@ -54,7 +54,7 @@ web-vm2                    : ok=12   changed=7    unreachable=0    failed=0
 | web-vm2 | 7 | package, `Listen` line, vhost, page, firewall rule, service start, reload handler |
 | proxy-vm1 | 9 | package(s), TLS dirs, cert + chain copy, key copy, `nginx.conf`, firewall ports, SELinux boolean, service start, reload handler |
 
-`failed=0` on every host — the whole platform came up in one pass, in the order [[Milestone 4 — Trust|PKI]] → [[Milestone 2 — Web Server Role|Apache]] → [[Milestone 3 — Proxy Gateway Role|NGINX]] → [[Milestone 5 — Client Landing Zone|client + verify]] that [[OLIVERIO — Deployment Automation#2.7 · Build order vs milestone numbers|the build order in §2.7]] requires.
+`failed=0` on every host — the whole platform came up in one pass, in the order [[Milestone 4 — Trust|PKI]] → [[Milestone 2 — Web Server Role|Apache]] → [[Milestone 3 — Proxy Gateway Role|NGINX]] → [[Milestone 5 — Client Landing Zone|client + verify]] that [[OLIVERIO — Deployment Automation#2.7 Build order vs milestone numbers|the build order in §2.7]] requires.
 
 ---
 

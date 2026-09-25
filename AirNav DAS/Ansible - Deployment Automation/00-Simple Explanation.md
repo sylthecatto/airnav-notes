@@ -321,7 +321,7 @@ webpage_message: "Served by Apache on web-vm2 through the NGINX reverse proxy."
 This is the most specific scope available: a value that applies to one named host only. If a second web server joined the inventory, it would receive its own `host_vars/<hostname>.yml` file with its own value for `webpage_message`, independent of this one.
 
 > [!question]- What happens if the same variable name is defined in more than one of these files?
-> Ansible resolves this using a fixed rule called **variable precedence**: the more specific scope always overrides the more general one. A value in `host_vars/` overrides the same name in `group_vars/<group>.yml`, which overrides `group_vars/all.yml`, which overrides a role's own `defaults/main.yml`. [[Milestone 1 — Project Hangar#1.4 Variables and precedence|The complete ordering is documented here]].
+> Ansible resolves this using a fixed rule called **variable precedence**: the more specific scope always overrides the more general one. A value in `host_vars/` overrides the same name in `group_vars/<group>.yml`, which overrides `group_vars/all.yml`, which overrides a role's own `defaults/main.yml`. [[OLIVERIO — Deployment Automation#1.4 Variables and precedence|The complete ordering is documented here]].
 
 ### 6.6 `collections/requirements.yml` — pinned external module dependencies
 
@@ -563,6 +563,8 @@ The **server certificate** for `labapp.com` follows the identical two-step proce
 
 > [!warning] A real consequence of this design, observed directly in this project
 > Every time the machine holding `pki_dir` is rebuilt from a clean state (no prior files present), this role generates a **completely new** key pair for the Root CA — the *name* `AirNav DAS Lab Root CA` stays the same because it's just a text field, but the underlying cryptographic key is entirely different. Any client that had previously trusted the old Root CA certificate will reject certificates signed by the new one with a signature-verification failure, even though the issuer name matches — because trust was established for a specific key, not a name. This actually happened during this project's own repeatability testing, and required re-importing the newly generated Root CA into the browser used for manual verification.
+>
+> Note that this only ever affects a **personal laptop browser** used for an optional visual check — the actual client the project targets, `control-vm3`, is re-trusted automatically on every playbook run by the `client_trust` role in §10, with no manual step at all. [[Milestone 5 — Client Landing Zone#Scope note: this is the entire graded requirement — a personal laptop is not|See here]] for the laptop-side convenience script that automates the re-trust step for Chromium.
 
 ---
 

@@ -135,7 +135,7 @@ The second test deliberately sets `validate_certs: false` — not because the ce
 
 ## Why the certificate had to exist before this role could even run
 
-`nginx -t -c %s` doesn't just check syntax — it checks that every file the config *references* actually exists and is readable, including `ssl_certificate` and `ssl_certificate_key`. If [[Milestone 4 — Trust]] hadn't already produced `labapp.com.crt` and `labapp.com.key` on the control node for this role to copy over, the very first `nginx -t` here would have failed and this role could never succeed — which is exactly why the master guide builds Milestone 4 before Milestone 3, even though the spec numbers them the other way around. See [[OLIVERIO — Deployment Automation#2.7 · Build order vs milestone numbers]].
+`nginx -t -c %s` doesn't just check syntax — it checks that every file the config *references* actually exists and is readable, including `ssl_certificate` and `ssl_certificate_key`. If [[Milestone 4 — Trust]] hadn't already produced `labapp.com.crt` and `labapp.com.key` on the control node for this role to copy over, the very first `nginx -t` here would have failed and this role could never succeed — which is exactly why the master guide builds Milestone 4 before Milestone 3, even though the spec numbers them the other way around. See [[OLIVERIO — Deployment Automation#2.7 Build order vs milestone numbers]].
 
 ---
 

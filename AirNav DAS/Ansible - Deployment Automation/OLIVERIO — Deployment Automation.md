@@ -1687,11 +1687,11 @@ Reset first ([[#8.1 Reset to clean prepared VMs]]), then follow this script:
 | 11 | Drift correction / automation issue             | §8.4, or tell the `semanage` story from §8.6                                               | Detect → diff → converge → verify                                                         |
 
 > [!tip] Optional — open it in the laptop browser
-> 1. On the laptop, change the old Phase 2 line in `/etc/hosts` from `192.168.100.100 labapp.com` to `192.168.100.41 labapp.com`.
-> 2. Copy the CA with `scp root@192.168.100.40:/root/lab-pki/root-ca.crt ~/airnav-lab-root-ca.crt`.
-> 3. Import it in the browser: Firefox → Settings → Certificates → Authorities → Import, then tick "trust for websites".
+> This is outside the spec — the client the assignment cares about is control-vm3, which already trusts the CA automatically via [[Milestone 5 — Client Landing Zone]]. This is purely a visual for your own laptop, unrelated to grading.
 >
-> This is outside the spec (the client is VM3), but it makes a nice visual.
+> 1. On the laptop, add `192.168.100.41 labapp.com` to `/etc/hosts` (remove any older line for the same name — two entries for one hostname resolves to whichever comes first, which can silently point at a stale address).
+> 2. For **Chromium** and other browsers that read the shared Linux NSS certificate store: run `refresh-local-trust.sh` (in this same vault folder) — it fetches the current CA from control-vm3 and imports it with no GUI step. Re-run it any time the CA is regenerated (e.g. after a clean-VM rollback).
+> 3. For **Firefox-family browsers (including Zen Browser)**: these keep a separate, per-profile certificate store the script above cannot reach. Import manually: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import → pick the CA the script just fetched to `~/Downloads/airnav-lab-root-ca.crt` → tick "Trust this CA to identify websites." Repeat this manual step after every CA regeneration.
 
 ---
 
