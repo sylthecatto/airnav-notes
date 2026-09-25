@@ -69,8 +69,17 @@ import_into() {
         nssdb="sql:$profile_dir"
     elif [ -f "$profile_dir/cert8.db" ]; then
         nssdb="$profile_dir"          # legacy dbm format, no sql: prefix
+    elif [ -d "$profile_dir" ]; then
+        # A real profile directory that has never had its certificate database
+        # initialized yet (common for a brand-new profile that hasn't fully
+        # started the browser). Firefox/Zen would create this automatically on
+        # first launch; certutil -N creates the identical, empty database
+        # up front, so no browser launch is required first.
+        echo "    $label has no certificate database yet — initializing one (matches what the browser would create on first launch)..."
+        certutil -N -d "sql:$profile_dir" --empty-password
+        nssdb="sql:$profile_dir"
     else
-        echo "    (skipping $label — no cert9.db/cert8.db found in $profile_dir)"
+        echo "    (skipping $label — directory not found: $profile_dir)"
         return 0
     fi
 

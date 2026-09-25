@@ -165,7 +165,9 @@ Find that path from inside Zen itself: address bar → `about:support` → **Pro
 As a bonus, it also refreshes the shared NSS database at `~/.pki/nssdb` if one exists on the machine, which covers Chromium and other NSS-aware apps at no extra cost — harmless if none are installed.
 
 > [!success] Tested against a real Firefox-format certificate database
-> Both the profile auto-discovery (parsing a `profiles.ini` and resolving a relative `Path=` entry, exactly as a real Zen install lays one out) and the certutil import itself were verified end to end against an actual NSS certificate database built with `certutil -N` — confirmed trusted afterward with `Certificate Trust Flags: SSL Flags: Valid CA, Trusted CA`, the identical flags Firefox itself checks. What could not be verified directly is the *exact* profile path on this specific machine's real Zen install, since that path isn't visible outside the browser's own process — hence the `ZEN_PROFILE_DIR` override and the `about:support` instructions above.
+> Both the profile auto-discovery (parsing a `profiles.ini` and resolving a relative `Path=` entry, exactly as a real Zen install lays one out) and the certutil import itself were verified end to end against an actual NSS certificate database built with `certutil -N` — confirmed trusted afterward with `Certificate Trust Flags: SSL Flags: Valid CA, Trusted CA`, the identical flags Firefox itself checks.
+>
+> The auto-discovery correctly found the real profile on the first actual run of this script (`~/.var/app/app.zen_browser.zen/.zen/<id>.Default Profile` — the Flatpak install layout), confirming the `profiles.ini` parsing works against a genuine install, not just the mock used to build it. That first run also surfaced one real gap: a brand-new profile that hasn't had its certificate database created yet (the browser normally does this on first launch) — the script now detects this and initializes an empty database itself with `certutil -N`, verified to produce the identical result as a browser-initialized one, so no manual "launch the browser once first" step is needed.
 
 ---
 
