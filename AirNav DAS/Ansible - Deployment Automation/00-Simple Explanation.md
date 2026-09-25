@@ -13,13 +13,14 @@ tags:
 parent: "[[OLIVERIO — Deployment Automation]]"
 author: Hans Oliverio
 created: 2026-09-24
-status: fundamentals reference
+updated: 2026-09-25
+status: fundamentals reference — includes every file on control-vm3, verbatim
 ---
 
 # 00 — Simple Explanation
 
 > [!abstract] Purpose of this note
-> The other notes in this folder are **evidence** — proof, for a trainer, that the project works. This note is **instruction** — for you, so the underlying mechanisms actually stick. Every concept below is explained in plain, precise technical language first; that explanation stands on its own and should make sense with no outside knowledge. Where an analogy genuinely helps build intuition, it appears afterward, clearly marked, as an *addition* — never as a replacement for the real explanation.
+> The other notes in this folder are **evidence** — proof, for a trainer, that the project works. This note is **instruction** — for you, so the underlying mechanisms actually stick, and a **complete offline reference**: every file that exists on control-vm3's `/root/ansible-platform` is reproduced here **verbatim** (fetched directly from the live machine, not retyped from memory), with a line-by-line breakdown of what each line does. You should be able to read this note with no SSH access, no laptop, and no lab at all, and still understand exactly what the project does and why.
 
 > [!info] How this note is formatted
 > - `[!info]` — a definition or a technical fact, stated precisely.
@@ -27,7 +28,7 @@ status: fundamentals reference
 > - `[!tip]` — a practical note or a shortcut.
 > - `[!warning]` — a real mistake this project actually hit, and why.
 > - `[!question]-` — a folded "wait, but why" answer. Click to expand.
-> - Code blocks are followed immediately by a plain-language breakdown — read the code, then the paragraph under it.
+> - Every file in §6 is shown as a complete code block, immediately followed by a table with **three** columns: the exact line(s), a precise **technical** explanation, and the same idea **in plain terms**. Both explanations stand on their own — you don't need the analogy sections earlier in this note to understand the technical column.
 
 ---
 
@@ -38,14 +39,10 @@ status: fundamentals reference
 3. [[#3. Why HTTPS Needs a Private Certificate Authority]]
 4. [[#4. Ansible Concepts, Defined Precisely]]
 5. [[#5. YAML — the Notation Everything Is Written In]]
-6. [[#6. The Project's Configuration Files, Explained Line by Line]]
-7. [[#7. Milestone 2 — the Apache Role, Line by Line]]
-8. [[#8. Milestone 4 — the Certificate Authority Role, Line by Line]]
-9. [[#9. Milestone 3 — the NGINX Role, Line by Line]]
-10. [[#10. Milestone 5 — the Client Role, Line by Line]]
-11. [[#11. Milestone 6 — Why Re-Running the Same Command Proves Anything]]
-12. [[#12. Full Execution, Start to Finish, in Order]]
-13. [[#13. Glossary]]
+6. [[#6. Complete File-by-File Reference — Every File on control-vm3, Verbatim]]
+7. [[#7. Why Re-Running the Same Command Proves Anything]]
+8. [[#8. Full Execution, Start to Finish, in Order]]
+9. [[#9. Glossary]]
 
 ---
 
@@ -181,166 +178,260 @@ An Ansible task file is a **list of maps** — each `- name: ...` line begins on
     state: present              # a second argument passed to that module
 ```
 
-`{{ double curly braces }}` mark a place where a variable's current value is substituted before the file is used. This substitution mechanism is called Jinja2 templating, and it works identically inside plain `.yml` task files and inside `.j2` template files.
+`{{ double curly braces }}` mark a place where a variable's current value is substituted before the file is used. This substitution mechanism is called Jinja2 templating, and it works identically inside plain `.yml` task files and inside `.j2` template files. A Jinja2 **filter**, written as `value | filter_name`, transforms a value inline — for example `backend_port | int` converts a value to an integer, and `foo | default('')` substitutes an empty string if `foo` is undefined. Several tables below contain filters like these.
 
 ---
 
-## 6. The Project's Configuration Files, Explained Line by Line
+## 6. Complete File-by-File Reference — Every File on control-vm3, Verbatim
 
-### 6.1 `ansible.cfg` — settings for how Ansible itself behaves
+> [!tip] How this section was built
+> Every file below was copied directly from `/root/ansible-platform` on control-vm3 on 2026-09-25 — not retyped from memory or from an earlier draft. If you ever suspect this note has drifted from the real deployment, the way to check is the same way this section was built: `scp -r root@192.168.100.40:/root/ansible-platform ~/ansible-platform-check` and diff it.
+
+The project has one master playbook (`site.yml`), configuration split across an inventory and several variable files, and five roles. This section covers every one of them, in the order a newcomer would most usefully read them: project settings first, then the machine list and variables, then the master playbook, then each role in the order `site.yml` actually runs them.
+
+### 6.1 `ansible.cfg` — project settings
 
 ```ini
 [defaults]
 inventory = ./inventory/hosts.yml
 roles_path = ./roles
 collections_path = ./collections
+
+# SSH login user on managed nodes
 remote_user = root
+# How many hosts are configured in parallel
 forks = 5
+# Host keys were accepted during ssh-copy-id, so keep MITM protection ON
 host_key_checking = True
+# No *.retry files after a failure
 retry_files_enabled = False
+# Use the platform python3 without printing the discovery warning
 interpreter_python = auto_silent
+# Human-readable task results (built into ansible-core >= 2.13, no extra collection)
 callback_result_format = yaml
 
 [privilege_escalation]
+# Run tasks as root. A no-op while remote_user is root, but it keeps the
+# project working unchanged if you later switch to a non-root automation user.
 become = True
 become_method = sudo
 become_user = root
 become_ask_pass = False
 ```
 
-| Setting | Effect |
-| --- | --- |
-| `inventory = ./inventory/hosts.yml` | Explicitly names the inventory file, rather than relying on a system-wide default location. |
-| `roles_path = ./roles` | Tells Ansible where to find role directories referenced in `site.yml`. |
-| `collections_path = ./collections` | Uses a project-local copy of downloaded collections instead of a system-wide one, so the project's dependencies travel with the project folder. |
-| `remote_user = root` | The SSH login account used on every managed node. |
-| `forks = 5` | The maximum number of managed nodes Ansible will act on simultaneously (this project only has 3, so this ceiling is never actually reached). |
-| `host_key_checking = True` | Verifies each managed node's SSH host key matches what was recorded on first connection, protecting against a machine at that address being silently replaced. |
-| `retry_files_enabled = False` | Disables Ansible's default behavior of writing a `.retry` file listing failed hosts after an unsuccessful run. |
-| `interpreter_python = auto_silent` | Uses whichever Python interpreter is present on the managed node, without printing an informational warning about the detection. |
-| `callback_result_format = yaml` | Formats task output as indented, readable YAML in the terminal instead of a single-line JSON blob. |
-| `become = True` / `become_method = sudo` | Escalates privilege to `root` via `sudo` for tasks that require it. |
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `[defaults]` | INI section header; every `key = value` line until the next `[section]` belongs to Ansible's core settings namespace. | Labels the block of settings that follows as "the main settings." |
+| `inventory = ./inventory/hosts.yml` | Overrides Ansible's default inventory search path with an explicit, project-relative file. | Says exactly which file lists the machines. |
+| `roles_path = ./roles` | Adds this directory to the search path Ansible uses when a playbook references a role by name. | Says where the toolboxes referenced in `site.yml` live. |
+| `collections_path = ./collections` | Directs both `ansible-galaxy collection install` and runtime module lookup to a project-local directory instead of the user-wide default (`~/.ansible/collections`). | Keeps the extra tools bundled inside the project folder. |
+| `remote_user = root` | The SSH username Ansible authenticates as on every managed node unless overridden per host. | Log in as root everywhere. |
+| `forks = 5` | The maximum number of managed nodes processed concurrently per task. | At most 5 machines worked on at once (moot with only 3 hosts). |
+| `host_key_checking = True` | Enforces SSH host-key verification against `~/.ssh/known_hosts`; refuses to connect if a host's key no longer matches what was recorded when it was first trusted. | Won't silently talk to a machine whose identity changed. |
+| `retry_files_enabled = False` | Suppresses the default behavior of writing a `<playbook>.retry` file listing failed hosts after a run with failures. | No leftover retry files. |
+| `interpreter_python = auto_silent` | Selects the managed node's Python interpreter automatically, without printing the `[WARNING]: Platform ... discovered interpreter` message. | Uses whatever Python is already there, quietly. |
+| `callback_result_format = yaml` | Selects ansible-core's built-in `yaml` stdout callback, formatting task results as indented YAML rather than single-line JSON. | Makes the terminal output readable. |
+| `[privilege_escalation]` | INI section header for settings governing `become` (privilege escalation) behavior. | Labels the block of settings about "becoming root." |
+| `become = True` | Every task runs with privilege escalation applied by default. | Do admin-level actions automatically when needed. |
+| `become_method = sudo` | Specifies the escalation mechanism to invoke. | Uses `sudo` specifically. |
+| `become_user = root` | The account to escalate to. | Become root, specifically. |
+| `become_ask_pass = False` | Assumes passwordless `sudo` is configured on managed nodes. | Won't stop mid-run to ask for a `sudo` password. |
 
-> [!question]- If `remote_user` is already `root`, what does `become` actually add?
-> Nothing observable today — escalating to root from an already-root session has no effect. Its purpose is forward-looking: if this project's login account is ever changed to a lower-privileged user (standard practice in production, since logging in directly as root is a security liability), `become: True` is already the mechanism that grants root privileges *for the specific tasks that need them*, without any other file in the project needing to change.
+### 6.2 `.gitignore`
 
-### 6.2 `inventory/hosts.yml` — the list of managed machines and their groups
+```gitignore
+collections/ansible_collections/
+*.retry
+```
+
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `collections/ansible_collections/` | Excludes the downloaded collection source (potentially thousands of files) from version control. | Don't track the huge pile of downloaded library code. |
+| `*.retry` | Excludes any leftover retry-list file. Belt-and-braces — `retry_files_enabled = False` in `ansible.cfg` already prevents these from being created. | A safety net, just in case. |
+
+### 6.3 `inventory/hosts.yml` — the machine list
 
 ```yaml
 all:
   children:
-    proxy:
+    proxy:                          # VM1 — NGINX reverse proxy (client-facing)
       hosts:
         proxy-vm1:
           ansible_host: 192.168.100.41
-    webserver:
+    webserver:                      # VM2 — Apache backend (only the proxy talks to it)
       hosts:
         web-vm2:
           ansible_host: 192.168.100.42
-    client:
+    client:                         # VM3 — test client (also the control node)
       hosts:
         control-vm3:
           ansible_host: 127.0.0.1
-          ansible_connection: local
-    pki_ca:
+          ansible_connection: local # run tasks directly, no SSH to itself
+    pki_ca:                         # where the lab Root CA lives (the control node)
       hosts:
         control-vm3:
-    lab:
+    lab:                            # parent group = the whole platform
       children:
         proxy:
         webserver:
         client:
 ```
 
-This is a nested structure: `all` contains `children`, each of which is a named group. `proxy` contains one host, `proxy-vm1`, whose network address is given by `ansible_host`. `control-vm3` is listed under `client` with `ansible_connection: local` — this setting tells Ansible not to open an SSH connection for this host at all, and instead execute tasks directly on the machine `ansible-playbook` is already running on, since it is targeting itself. `control-vm3` also appears separately under `pki_ca` — a single host can be a member of any number of groups simultaneously; group membership represents *facts about a host's role*, not a mutually exclusive category. `lab` defines no hosts directly; its `children` list means "everything in `proxy`, `webserver`, and `client`, combined," providing a single name that refers to every machine at once.
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `all:` | The implicit top-level group; every custom group nests under it via `children:`. | The "everyone" box that holds all the smaller boxes. |
+| `children:` (under `all`) | Declares that what follows is a set of named subgroups, not a direct list of hosts. | Says "here are the teams," not "here are individual machines." |
+| `proxy:` | Defines a group named `proxy`. | Names one team: "proxy." |
+| `hosts:` (under `proxy`) | Declares that what follows lists individual member hosts. | Says "here's who's on this team." |
+| `proxy-vm1:` | Declares a host with the inventory name `proxy-vm1` — a label Ansible uses to refer to this machine; it need not match the machine's real hostname (though it does here). | Names one machine. |
+| `ansible_host: 192.168.100.41` | A reserved Ansible variable giving the real network address to connect to for this host. | The real address to reach `proxy-vm1` at. |
+| `webserver: / web-vm2: / ansible_host: 192.168.100.42` | Identical structure, defining the `webserver` group and its one member. | Names the second team and its machine. |
+| `client: / control-vm3:` | Defines the `client` group with one member. | Names the third team. |
+| `ansible_host: 127.0.0.1` | The IPv4 loopback address — "this machine, itself." | Says "this is the machine you're already on." |
+| `ansible_connection: local` | Overrides the default `ssh` connection plugin with `local`, which runs modules via a direct subprocess rather than opening an SSH session. | Don't bother connecting over the network — just run it here. |
+| `pki_ca: / hosts: / control-vm3:` (no `ansible_host` here) | Defines a second group also containing `control-vm3`. Ansible merges variables for a host from every group it belongs to, so `control-vm3`'s connection settings (already defined under `client`) still apply. | A second team with the same one member. |
+| `lab:` | Defines a group named `lab`. | Names a fourth, "everyone in the project" team. |
+| `children: / proxy: / webserver: / client:` (under `lab`) | Declares `lab`'s membership as three other groups combined, not individual hosts — every host in any of those groups is transitively a member of `lab`. | Says "`lab` means all three teams, put together." |
 
 > [!question]- Why is `control-vm3` in two separate groups instead of one combined group?
-> Because `client` and `pki_ca` describe two independent facts that happen to both be true of the same machine today: "this machine should receive client-side configuration" and "this machine hosts the certificate authority." Keeping them as separate groups means any file in the project that needs to know "which host runs the CA" queries the `pki_ca` group specifically, and would continue to work unmodified if the certificate authority were later moved to a dedicated fourth machine — only the inventory would need to change.
+> Because `client` and `pki_ca` describe two independent facts that happen to both be true of the same machine today: "this machine should receive client-side configuration" and "this machine hosts the certificate authority." Keeping them separate means any file that needs "which host runs the CA" queries the `pki_ca` group specifically, and would keep working unmodified if the CA later moved to a dedicated fourth machine — only the inventory would change.
 
-### 6.3 `group_vars/all.yml` — variables shared by every host
+### 6.4 `group_vars/all.yml` — variables shared by every host
 
 ```yaml
-domain_name: "labapp.com"
-proxy_http_port: 80
-proxy_https_port: 443
-backend_port: 8080
+# group_vars/all.yml — COMMON values shared by every host.
+# Change a value here once and every template/task that uses it follows.
 
+# --- Service identity ---------------------------------------------------------
+domain_name: "labapp.com"            # FQDN users type; goes into the cert SAN, nginx server_name and /etc/hosts
+proxy_http_port: 80                  # NGINX plain HTTP (redirects to HTTPS)
+proxy_https_port: 443                # NGINX HTTPS (client-facing)
+backend_port: 8080                   # Apache listen port (internal only)
+
+# --- Addresses derived from the inventory (never typed twice) -----------------
 proxy_address:   "{{ hostvars[groups['proxy'][0]]['ansible_host'] }}"
 backend_address: "{{ hostvars[groups['webserver'][0]]['ansible_host'] }}"
 
+# --- Page content + the string our tests look for -----------------------------
 webpage_title: "AirNav DAS - System Discovery Platform"
-webpage_marker: "DEPLOYED-BY-ANSIBLE"
+webpage_marker: "DEPLOYED-BY-ANSIBLE"   # verify tasks fail if this is missing from the response
 
-pki_dir: "/root/lab-pki"
+# --- Internal PKI (lives on the control node, group pki_ca) -------------------
+pki_dir: "/root/lab-pki"             # CA working directory; OUTSIDE the project so keys never land in git
 pki_org: "AirNav FCO Engineering"
+pki_ou: "DAS Lab"
+pki_country: "PH"
+pki_state: "Western Visayas (Region VI)"
+pki_city: "Iloilo"
 root_ca_common_name: "AirNav DAS Lab Root CA"
-root_ca_valid_days: 3650
-server_cert_valid_days: 199
+root_ca_valid_days: 3650             # 10 years: long-lived trust anchor
+server_cert_valid_days: 199          # under the CA/B Forum 200-day cap in force since 15 Mar 2026
 
+# File names produced by the pki_ca role and consumed by nginx_proxy / client_trust
 root_ca_cert_file: "{{ pki_dir }}/root-ca.crt"
 server_cert_file:  "{{ pki_dir }}/{{ domain_name }}.crt"
 server_key_file:   "{{ pki_dir }}/{{ domain_name }}.key"
 ```
 
-Most of these lines assign a literal value to a name. Two lines instead compute a value from the inventory:
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `domain_name: "labapp.com"` | The FQDN used throughout the project: as the CSR common name and SAN, NGINX's `server_name`, and the `/etc/hosts` entry. | The web address everything is built around. |
+| `proxy_http_port: 80` | The port NGINX listens on for plain HTTP, used only to issue a redirect. | The "insecure door," used only to point elsewhere. |
+| `proxy_https_port: 443` | The port NGINX listens on for TLS-encrypted HTTPS — the port a real client actually uses. | The "secure door." |
+| `backend_port: 8080` | The port Apache listens on, reachable only from the proxy's IP via a firewall rule. | The private door only the proxy may use. |
+| `proxy_address: "{{ hostvars[groups['proxy'][0]]['ansible_host'] }}"` | Resolves, at runtime, to the `ansible_host` value of the first member of the `proxy` group — i.e. whatever address the inventory currently assigns to `proxy-vm1`. | The proxy's address, read from the inventory instead of retyped. |
+| `backend_address: "{{ hostvars[groups['webserver'][0]]['ansible_host'] }}"` | The identical mechanism, resolving to `web-vm2`'s address. | The backend's address, likewise derived, not retyped. |
+| `webpage_title: "AirNav DAS - System Discovery Platform"` | A string substituted into the HTML `<title>` and `<h1>` by the `apache_web` role's template. | The page's headline text. |
+| `webpage_marker: "DEPLOYED-BY-ANSIBLE"` | A unique string printed on the page and searched for by every automated content check (`failed_when: webpage_marker not in ...`) throughout the project. | The "proof word" every test looks for. |
+| `pki_dir: "/root/lab-pki"` | The absolute path where the certificate authority's keys and certificates are stored, deliberately outside `/root/ansible-platform` so they can never be accidentally committed to the project's git repository. | Where the certificate factory keeps its files — kept apart from the project on purpose. |
+| `pki_org: / pki_ou: / pki_country: / pki_state: / pki_city:` | String constants supplied as the `organization_name`, `organizational_unit_name`, `country_name`, `state_or_province_name`, and `locality_name` arguments to every CSR generated by the `pki_ca` role. | The organization's address details, printed on every certificate this project issues. |
+| `root_ca_common_name: "AirNav DAS Lab Root CA"` | The Root CA certificate's subject/issuer common name, and the nickname used to look it up in a client's trust store later. | The certificate authority's official name. |
+| `root_ca_valid_days: 3650` | The number of days from generation until the Root CA certificate expires (10 years). | How long the certificate authority itself stays valid. |
+| `server_cert_valid_days: 199` | The number of days the `labapp.com` server certificate stays valid — chosen to stay under the CA/Browser Forum's 200-day maximum public certificate lifetime, in force from 15 March 2026. | How long the website's own certificate stays valid — deliberately short, matching current public-CA practice. |
+| `root_ca_cert_file: "{{ pki_dir }}/root-ca.crt"` | Builds the full path to the Root CA's public certificate by concatenating `pki_dir` with a fixed filename. | Where the certificate authority's public certificate will be found. |
+| `server_cert_file: "{{ pki_dir }}/{{ domain_name }}.crt"` | Builds the server certificate's path, incorporating `domain_name` so the filename itself reflects the FQDN. | Where `labapp.com`'s certificate will be found. |
+| `server_key_file: "{{ pki_dir }}/{{ domain_name }}.key"` | Builds the server private key's path, identically. | Where `labapp.com`'s private key will be found. |
 
-```
-proxy_address: "{{ hostvars[groups['proxy'][0]]['ansible_host'] }}"
-```
-
-Evaluated in order: `groups['proxy']` retrieves the list of host names belonging to the `proxy` group — `['proxy-vm1']`. `groups['proxy'][0]` retrieves the first element of that list (list indices start at 0) — `'proxy-vm1'`. `hostvars['proxy-vm1']` retrieves the complete set of known variables for that specific host. `hostvars['proxy-vm1']['ansible_host']` retrieves that host's configured network address — `192.168.100.41`. The net effect: `proxy_address` always equals whatever address the inventory currently assigns to the proxy host, without that address being typed a second time anywhere else in the project. If the inventory changes, every file that references `proxy_address` reflects the change automatically on the next run.
-
-### 6.4 `group_vars/proxy.yml`, `webserver.yml`, `client.yml` — variables scoped to one group
+### 6.5 `group_vars/proxy.yml`, `group_vars/webserver.yml`, `group_vars/client.yml` — group-scoped variables
 
 ```yaml
-# proxy.yml
-nginx_tls_dir: "/etc/pki/nginx"
+# group_vars/proxy.yml — values only the [proxy] group needs.
+nginx_tls_dir: "/etc/pki/nginx"                          # where NGINX reads its cert/key
 nginx_cert_path:  "{{ nginx_tls_dir }}/{{ domain_name }}.crt"
 nginx_key_path:   "{{ nginx_tls_dir }}/private/{{ domain_name }}.key"
-nginx_chain_path: "{{ nginx_tls_dir }}/root-ca.crt"
+nginx_chain_path: "{{ nginx_tls_dir }}/root-ca.crt"      # the chain up to (and incl.) our root
 nginx_ssl_protocols: "TLSv1.2 TLSv1.3"
 ```
+
 ```yaml
-# webserver.yml
+# group_vars/webserver.yml — values only the [webserver] group needs.
 apache_document_root: "/var/www/html"
 apache_vhost_file: "/etc/httpd/conf.d/{{ domain_name }}.conf"
 ```
+
 ```yaml
-# client.yml
+# group_vars/client.yml — values only the [client] group needs.
 client_trust_anchor: "/etc/pki/ca-trust/source/anchors/airnav-das-lab-root-ca.crt"
 ```
 
-Variables defined in `group_vars/<groupname>.yml` are only visible to hosts in that specific group. This keeps a value like `nginx_tls_dir` — meaningless to `web-vm2`, which never touches NGINX — out of the file every host reads.
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `nginx_tls_dir: "/etc/pki/nginx"` | The base directory on `proxy-vm1` where TLS material is stored — the RHEL-family convention for NGINX's certificate location. | Where NGINX's certificate folder lives. |
+| `nginx_cert_path: "{{ nginx_tls_dir }}/{{ domain_name }}.crt"` | Builds the full destination path the server certificate is copied to on the proxy. | Where the website's certificate ends up on the proxy machine. |
+| `nginx_key_path: "{{ nginx_tls_dir }}/private/{{ domain_name }}.key"` | Builds the destination path for the private key, under a `private/` subdirectory with tighter permissions. | Where the private key ends up — in the extra-locked subfolder. |
+| `nginx_chain_path: "{{ nginx_tls_dir }}/root-ca.crt"` | Builds the destination path for the Root CA certificate, which NGINX serves alongside the leaf certificate as part of the chain. | Where the "chain of trust" certificate ends up. |
+| `nginx_ssl_protocols: "TLSv1.2 TLSv1.3"` | The space-separated list of TLS protocol versions NGINX is permitted to negotiate — excludes older, deprecated versions (SSLv3, TLSv1.0, TLSv1.1). | Only allows modern, currently-secure encryption versions. |
+| `apache_document_root: "/var/www/html"` | The standard RHEL-family path Apache serves static files from. | Where the actual webpage file lives. |
+| `apache_vhost_file: "/etc/httpd/conf.d/{{ domain_name }}.conf"` | Builds the path to Apache's virtual-host configuration file, named after the domain. | Where Apache's site-specific settings file goes. |
+| `client_trust_anchor: "/etc/pki/ca-trust/source/anchors/airnav-das-lab-root-ca.crt"` | The RHEL-family convention path for a locally-trusted CA certificate, watched by `update-ca-trust`. | Where the trusted certificate list keeps this Root CA. |
 
-### 6.5 `host_vars/web-vm2.yml` — a variable scoped to exactly one host
+### 6.6 `host_vars/web-vm2.yml` — a variable scoped to exactly one host
 
 ```yaml
+# host_vars/web-vm2.yml — values for THIS host only (highest precedence of the
+# inventory-file variables). A second web server would get its own file.
 webpage_message: "Served by Apache on web-vm2 through the NGINX reverse proxy."
 ```
 
-This is the most specific scope available: a value that applies to one named host only. If a second web server joined the inventory, it would receive its own `host_vars/<hostname>.yml` file with its own value for `webpage_message`, independent of this one.
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `webpage_message: "Served by Apache on web-vm2 through the NGINX reverse proxy."` | A string substituted into the page template, defined at the most specific scope available (one named host), overriding the role's generic `defaults/main.yml` value ("Served by Apache."). | The sentence shown on the page, specific to this one machine. |
 
-> [!question]- What happens if the same variable name is defined in more than one of these files?
-> Ansible resolves this using a fixed rule called **variable precedence**: the more specific scope always overrides the more general one. A value in `host_vars/` overrides the same name in `group_vars/<group>.yml`, which overrides `group_vars/all.yml`, which overrides a role's own `defaults/main.yml`. [[OLIVERIO — Deployment Automation#1.4 Variables and precedence|The complete ordering is documented here]].
+> [!question]- Why does this variable exist here instead of in `group_vars/webserver.yml`?
+> Because it's a fact about *this one machine specifically*, not about "every machine in the webserver group." If a second web server joined the inventory, it would get its own `host_vars/<hostname>.yml` with its own message — `group_vars/webserver.yml` is reserved for values every member of that group should share.
 
-### 6.6 `collections/requirements.yml` — pinned external module dependencies
+### 6.7 `collections/requirements.yml` — pinned external module dependencies
 
 ```yaml
+# collections/requirements.yml — external modules this project needs, pinned to
+# versions that support ansible-core 2.14 (the AlmaLinux 9 package).
+# Install with:  ansible-galaxy collection install -r collections/requirements.yml
 collections:
-  - name: ansible.posix
+  - name: ansible.posix          # firewalld, seboolean
     version: ">=1.5.4,<1.6.0"
-  - name: community.crypto
+  - name: community.crypto       # openssl_privatekey, openssl_csr, x509_certificate
     version: ">=2.15.0,<3.0.0"
 ```
 
-Ansible's built-in module set does not include firewall management or certificate generation; those capabilities are provided by two separately-installed collections. This file specifies not just *which* collections are required, but a **version range** for each — pinning prevents an automatic upgrade to a newer version from silently changing behavior.
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `collections:` | Declares a list of external collections this project depends on. | The shopping list of extra tools. |
+| `- name: ansible.posix` | The collection providing `ansible.posix.firewalld` and `ansible.posix.seboolean`, used by the `apache_web` and `nginx_proxy` roles. | The toolbox with firewall and SELinux tools. |
+| `version: ">=1.5.4,<1.6.0"` | Constrains the installed version to this range. Version 1.6.x declares it does not support ansible-core 2.14 (the version installed here), so the upper bound prevents an incompatible upgrade. | Only use versions confirmed to work with this Ansible install. |
+| `- name: community.crypto` | The collection providing `openssl_privatekey`, `openssl_csr`, and `x509_certificate`, used by the `pki_ca` role. | The toolbox with certificate-building tools. |
+| `version: ">=2.15.0,<3.0.0"` | Constrains the installed version to the 2.x line. | Stay on a tested major version. |
 
-> [!warning] A real problem this pinning prevented
-> `ansible.posix` version 1.6.x explicitly declares that it does not support the version of ansible-core installed on this project's control node (2.14.18), and prints a compatibility warning. The version range `<1.6.0` keeps the project on the last version confirmed to work correctly, rather than silently pulling in an incompatible release the next time collections are installed.
-
-### 6.7 `site.yml` — the master playbook
+### 6.8 `site.yml` — the master playbook
 
 ```yaml
+# site.yml — THE master playbook. One command deploys and verifies the platform:
+#   ansible-playbook site.yml
+# Useful variations:
+#   ansible-playbook site.yml --check --diff    # dry run: show drift, change nothing
+#   ansible-playbook site.yml --tags verify     # run only the read-only tests
+#   ansible-playbook site.yml --tags nginx      # converge only the proxy role
+# Plays run top to bottom; each play targets an inventory group and applies roles.
+---
 - name: "Play 0 | Pre-flight checks on every lab host"
   hosts: lab
   gather_facts: true
@@ -350,180 +441,127 @@ Ansible's built-in module set does not include firewall management or certificat
         that:
           - ansible_facts['os_family'] == 'RedHat'
           - ansible_facts['distribution_major_version'] == '9'
-        fail_msg: "..."
+        fail_msg: "{{ inventory_hostname }} runs {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}; this project targets EL9."
+        success_msg: "{{ inventory_hostname }}: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }} OK"
+
     - name: Refuse to run with missing or malformed key variables
       ansible.builtin.assert:
         that:
           - domain_name is match('^[a-z0-9.-]+$')
           - backend_port | int > 0
-        fail_msg: "..."
+          - proxy_https_port | int > 0
+        fail_msg: "Check group_vars/all.yml: domain_name/ports are missing or invalid."
+        quiet: true
+      run_once: true
 
 - name: "Play 1 | Internal PKI on the control node"
   hosts: pki_ca
-  roles: [{ role: pki_ca, tags: [pki] }]
+  gather_facts: false
+  roles:
+    - { role: pki_ca, tags: [pki] }
 
 - name: "Play 2 | Apache backend"
   hosts: webserver
-  roles: [{ role: apache_web, tags: [apache] }]
+  gather_facts: false          # facts already gathered in Play 0 (cached for the run)
+  roles:
+    - { role: apache_web, tags: [apache] }
 
 - name: "Play 3 | NGINX reverse proxy with HTTPS"
   hosts: proxy
-  roles: [{ role: nginx_proxy, tags: [nginx] }]
+  gather_facts: false
+  roles:
+    - { role: nginx_proxy, tags: [nginx] }
 
 - name: "Play 4 | Client name resolution, trust and end-to-end verification"
   hosts: client
+  gather_facts: false
   roles:
     - { role: client_trust, tags: [client] }
     - { role: verify, tags: [verify] }
 ```
 
-Five plays, executed strictly in the order written:
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `---` | The YAML document-start marker. | A formality marking where the real content begins. |
+| `- name: "Play 0 \| Pre-flight checks on every lab host"` | Begins the first play in the list, with a human-readable name shown in the terminal output. | Names the first chapter of the run. |
+| `hosts: lab` | Targets the `lab` group — every host in `proxy`, `webserver`, and `client` combined. | This chapter runs on all three machines. |
+| `gather_facts: true` | Instructs Ansible to connect to and query each targeted host for system facts before running any tasks. | Look at each machine first, before doing anything. |
+| `tasks:` | Declares a direct, inline list of tasks for this play (as opposed to `roles:`, used by later plays). | Here's the checklist for this chapter. |
+| `ansible.builtin.assert:` / `that: [...]` | Evaluates a list of boolean expressions; if any is false, the play (and by default, the whole run) stops with an error. | Check these things; refuse to continue if any is wrong. |
+| `ansible_facts['os_family'] == 'RedHat'` | Compares a fact discovered during the gather-facts step against the literal string `'RedHat'`, true for RHEL-family distributions including AlmaLinux. | Is this a Red-Hat-family Linux? |
+| `ansible_facts['distribution_major_version'] == '9'` | Compares the discovered OS major version against `'9'` as a string. | Is it specifically version 9? |
+| `fail_msg: "..."` | The message printed if any condition in `that:` is false, interpolating facts to describe what was actually found. | The error message shown if the check fails. |
+| `success_msg: "..."` | The message printed if every condition passes. | The confirmation message shown if the check passes. |
+| `domain_name is match('^[a-z0-9.-]+$')` | Applies the Jinja2 `match` test with a regular expression, true only if `domain_name` consists entirely of lowercase letters, digits, dots, and hyphens. | Does the domain name look like a real, sane hostname? |
+| `backend_port \| int > 0` | Converts `backend_port` to an integer with the `int` filter, then checks it's a positive number. | Is the backend port a real, positive number? |
+| `proxy_https_port \| int > 0` | The identical check applied to the HTTPS port. | Is the HTTPS port a real, positive number? |
+| `quiet: true` | Suppresses printing the full list of conditions when the assertion succeeds, showing only the pass/fail result. | Don't clutter the output when this check passes. |
+| `run_once: true` | Runs this task on only one host in the play, rather than once per host, since the variables being checked are identical everywhere. | No need to check the same setting three separate times. |
+| `- name: "Play 1 \| Internal PKI on the control node"` | Begins the second play. | Names chapter two. |
+| `hosts: pki_ca` | Targets only the `pki_ca` group (`control-vm3`). | This chapter runs only on the certificate-authority machine. |
+| `gather_facts: false` | Skips re-querying facts, since Play 0 already gathered and cached them for the whole run. | No need to look at the machine again — already done. |
+| `roles: - { role: pki_ca, tags: [pki] }` | Applies the `pki_ca` role's entire task list to this play's hosts, and tags every task in it with `pki`. | Open the "certificate factory" toolbox and use everything in it; label this work "pki" for later. |
+| `- name: "Play 2 \| Apache backend"` / `hosts: webserver` / `roles: - { role: apache_web, tags: [apache] }` | Identical pattern, targeting the `webserver` group and applying the `apache_web` role. | Chapter three: set up the backend web server. |
+| `- name: "Play 3 \| NGINX reverse proxy with HTTPS"` / `hosts: proxy` / `roles: - { role: nginx_proxy, tags: [nginx] }` | Identical pattern, targeting `proxy` and applying `nginx_proxy`. | Chapter four: set up the reverse proxy. |
+| `- name: "Play 4 \| Client name resolution, trust and end-to-end verification"` / `hosts: client` | Targets the `client` group (`control-vm3`, in its client role). | Chapter five: set up and test the client. |
+| `roles: - { role: client_trust, ... } - { role: verify, ... }` | Applies two roles in this one play, in the listed order — `client_trust` fully completes before `verify` begins. | Two toolboxes for this chapter, opened one after the other. |
 
-- **Play 0** targets `lab` (every machine) and performs two validation checks before any real configuration begins. `ansible.builtin.assert` evaluates a list of conditions and halts the entire run with an explanatory message if any condition is false — this prevents, for example, applying configuration built for one operating system to a machine running a different one, or proceeding with an obviously malformed setting like an empty domain name.
-- **Play 1** targets only the `pki_ca` group and applies the `pki_ca` role — meaning every task file inside that role's directory is executed against that group.
-- **Plays 2 through 4** follow the identical pattern for their respective groups and roles.
+### 6.9 Role `pki_ca` — builds the Root CA and the server certificate
 
-The `tags:` value attached to each role allows a later, partial invocation — `ansible-playbook site.yml --tags nginx` executes only the `nginx_proxy` role's tasks, skipping the rest of the playbook, which is useful when only one component needs to be re-applied.
-
-> [!question]- Why does Play 0 use `gather_facts: true` while later plays use `gather_facts: false`?
-> "Gathering facts" means Ansible connects to a managed node and queries it for information (operating system, IP addresses, and so on) before running any tasks. This is a real network round-trip. Since Play 0 already gathers facts from every host in `lab`, and those results remain available for the rest of the playbook run, repeating the gathering step in every subsequent play would only re-fetch identical information at the cost of additional time — `gather_facts: false` skips that redundant step.
-
----
-
-## 7. Milestone 2 — the Apache Role, Line by Line
+#### `roles/pki_ca/defaults/main.yml`
 
 ```yaml
-- name: Install Apache
-  ansible.builtin.dnf:
-    name: "{{ apache_package }}"
-    state: present
+# roles/pki_ca/defaults/main.yml — lowest-precedence defaults for this role.
+# group_vars/all.yml overrides these; they only exist so the role is self-describing.
+root_ca_key_size: 4096        # long-lived trust anchor -> stronger key
+server_key_size: 2048         # leaf cert, rotated often
 ```
-`dnf` is AlmaLinux's package manager. `state: present` is a declaration, not a command: it tells the module the desired end state is "this package exists on the system." The module checks the local package database first; installation only occurs if the package is currently absent.
+
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `root_ca_key_size: 4096` | The RSA key length, in bits, for the Root CA's private key. Sits at the lowest variable-precedence level, so it's overridden by nothing else in this project (it isn't redefined in `group_vars`), but documents the value in the role itself. | How mathematically strong the certificate authority's own key is. |
+| `server_key_size: 2048` | The RSA key length for the server (leaf) private key — smaller, since it's replaced far more often than the root. | How strong the website's own key is (smaller, since it's short-lived). |
+
+#### `roles/pki_ca/tasks/main.yml`
 
 ```yaml
-- name: Set the Apache listen port (validated before it is written)
-  ansible.builtin.lineinfile:
-    path: /etc/httpd/conf/httpd.conf
-    regexp: '^Listen\s'
-    line: "Listen {{ backend_port }}"
-    validate: httpd -t -f %s
-  notify: Reload Apache
-```
-`lineinfile` finds a line in an existing file matching a pattern (`regexp`) and replaces it, or appends the line if no match is found — it modifies exactly one line and leaves the rest of the file untouched. Here, it locates the line beginning with `Listen` (Apache's directive for which TCP port to bind to) and rewrites it to use port 8080 rather than the default of 80, since port 80 is reserved for NGINX in this architecture. `validate: httpd -t -f %s` runs Apache's own configuration-syntax checker against a temporary copy of the file *before* the real file is overwritten; the write only proceeds if that check passes. `notify: Reload Apache` queues a handler to run later in this same play, but only because this task is expected to report a change.
+# roles/pki_ca/tasks/main.yml — build a 2-level lab PKI on the control node:
+#   Root CA (self-signed)  --signs-->  server certificate for {{ domain_name }}
+# Every module below is idempotent: it inspects the existing file and only
+# (re)writes it when it is missing or no longer matches the requested state.
 
-```yaml
-- name: Deploy the backend virtual host
-  ansible.builtin.template:
-    src: vhost.conf.j2
-    dest: "{{ apache_vhost_file }}"
-    mode: "0644"
-  notify: Reload Apache
-```
-`template` renders a `.j2` file (substituting all `{{ variables }}` with their current values) and writes the result to `dest`. `mode: "0644"` sets Unix file permissions: the owner may read and write the file, and everyone else may only read it — appropriate for a configuration file that isn't secret but shouldn't be modifiable by other accounts.
-
-```yaml
-- name: Deploy the managed webpage
-  ansible.builtin.template:
-    src: index.html.j2
-    dest: "{{ apache_document_root }}/index.html"
-    mode: "0644"
-```
-The same mechanism, applied to the actual HTML content. This task has no `notify:` — Apache reads a static content file fresh on every request, so no service reload is required for a content change to take effect; only *configuration* changes require Apache to be told about them.
-
-```yaml
-- name: Allow the backend port ONLY from the reverse proxy
-  ansible.posix.firewalld:
-    rich_rule: >-
-      rule family="ipv4" source address="{{ proxy_address }}/32"
-      port port="{{ backend_port }}" protocol="tcp" accept
-    permanent: true
-    immediate: true
-    state: enabled
-```
-`firewalld` is the Linux firewall management service; a **rich rule** allows a more specific condition than a plain "open this port" rule. This rule reads as: accept TCP traffic on port 8080, but only if its source IP address is exactly `proxy_address/32` (`/32` denotes a single specific address, not a range). Traffic from any other source to this port is rejected by the firewall's default policy. `permanent: true` writes the rule so it survives a reboot; `immediate: true` also applies it to the currently running firewall instance, without requiring a restart to take effect.
-
-```yaml
-- name: Ensure Apache is enabled at boot and running
-  ansible.builtin.service:
-    name: "{{ apache_service }}"
-    state: started
-    enabled: true
-```
-Two independent conditions are set in one task: `state: started` means the service process must be running right now; `enabled: true` means systemd (the Linux service manager) must start it automatically on every future boot, without manual intervention.
-
-```yaml
-- name: Apply pending Apache reloads before testing
-  ansible.builtin.meta: flush_handlers
-```
-Handlers normally execute once, after every task in the current play has run. `meta: flush_handlers` is a directive that forces any handlers already queued by earlier tasks to run immediately, at this point in the play — necessary here because the verification task that follows needs Apache already running with its final configuration.
-
-```yaml
-- name: Backend verification
-  when: not ansible_check_mode
-  tags: [verify]
-  block:
-    - name: Verify the page locally on the web server
-      ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ backend_port }}/"
-        return_content: true
-      register: apache_local
-      failed_when: webpage_marker not in apache_local.content
-```
-`block:` groups several tasks so a shared condition (`when:`) applies to all of them at once — here, "skip this entire group during a `--check` dry run, since nothing has actually been deployed yet to check." `uri` performs an HTTP request and can capture the response. `register: apache_local` stores the entire result (status code, response body, headers) in a named variable for later inspection. `failed_when:` overrides Ansible's default success/failure logic with a custom condition — this task is deliberately made to fail if the expected marker text is absent from the response, turning "does the page look approximately right" into an explicit, automatic pass/fail check.
-
-### The handlers file
-
-```yaml
-- name: Validate Apache configuration
-  ansible.builtin.command: httpd -t
-  changed_when: false
-  listen: Reload Apache
-
-- name: Reload Apache service
-  ansible.builtin.service:
-    name: "{{ apache_service }}"
-    state: reloaded
-  listen: Reload Apache
-```
-`listen: Reload Apache` means both of these handlers respond to the same `notify: Reload Apache` call. When triggered, Ansible runs every handler listening for that name **in the order they appear in this file** — validation first, reload second — regardless of the order in which they were notified elsewhere. `changed_when: false` on the first handler overrides Ansible's default assumption that a `command` task always counts as a change; since this command only checks syntax and never modifies anything, it is explicitly marked as a non-change. `state: reloaded` (as opposed to `restarted`) sends the service a signal to re-read its configuration without terminating existing connections first.
-
----
-
-## 8. Milestone 4 — the Certificate Authority Role, Line by Line
-
-```yaml
 - name: Create the CA working directory (root-only)
   ansible.builtin.file:
     path: "{{ pki_dir }}"
     state: directory
+    owner: root
+    group: root
     mode: "0700"
-```
-`mode: "0700"` is the strictest permission setting used anywhere in this project: only the file's owner may read, write, or even list the contents of this directory — not the owner's group, not any other account. This directory will shortly contain unencrypted private keys, so access is restricted as tightly as the filesystem allows.
 
-```yaml
+# ---------------- Root CA ----------------
 - name: Generate the Root CA private key
   community.crypto.openssl_privatekey:
     path: "{{ pki_dir }}/root-ca.key"
     type: RSA
     size: "{{ root_ca_key_size }}"
     mode: "0600"
-```
-This generates an RSA key pair and writes the private half to disk. `size: 4096` specifies the key length in bits — a larger key represents a computationally harder problem to break by brute force, at the cost of slightly slower cryptographic operations; 4096 bits is a conservative choice appropriate for a long-lived trust anchor. `mode: "0600"` restricts the file to read/write access by its owner only — one notch stricter even than the containing directory, since this specific file is the single most sensitive artifact in the project.
 
-```yaml
 - name: Create the Root CA signing request (CA extensions)
   community.crypto.openssl_csr:
     path: "{{ pki_dir }}/root-ca.csr"
     privatekey_path: "{{ pki_dir }}/root-ca.key"
     common_name: "{{ root_ca_common_name }}"
-    basic_constraints: ["CA:TRUE", "pathlen:0"]
+    organization_name: "{{ pki_org }}"
+    organizational_unit_name: "{{ pki_ou }}"
+    country_name: "{{ pki_country }}"
+    state_or_province_name: "{{ pki_state }}"
+    locality_name: "{{ pki_city }}"
+    basic_constraints: ["CA:TRUE", "pathlen:0"]   # may sign leaf certs only, no sub-CAs
     basic_constraints_critical: true
-    key_usage: [keyCertSign, cRLSign]
+    key_usage: [keyCertSign, cRLSign]             # a CA signs certs/CRLs, nothing else
     key_usage_critical: true
-```
-A **Certificate Signing Request (CSR)** is a data structure declaring the desired contents and extensions of a certificate, along with the corresponding public key, before it has been signed by anyone. `basic_constraints: ["CA:TRUE", "pathlen:0"]` declares that this certificate is permitted to sign other certificates (`CA:TRUE`), but that any certificate it signs may not itself sign further certificates (`pathlen:0` — a chain depth limit of zero beyond this point). `key_usage: [keyCertSign, cRLSign]` restricts what operations this key is permitted to perform to exactly two: signing certificates, and signing certificate revocation lists. Both constraints are marked `_critical: true`, meaning any certificate-processing software that does not understand a given extension is required by the X.509 standard to reject the certificate outright, rather than silently ignore a restriction it doesn't recognize.
+    create_subject_key_identifier: true
 
-```yaml
 - name: Self-sign the Root CA certificate
   community.crypto.x509_certificate:
     path: "{{ root_ca_cert_file }}"
@@ -531,182 +569,696 @@ A **Certificate Signing Request (CSR)** is a data structure declaring the desire
     privatekey_path: "{{ pki_dir }}/root-ca.key"
     provider: selfsigned
     selfsigned_not_after: "+{{ root_ca_valid_days }}d"
-```
-`provider: selfsigned` performs the signing operation using the CSR's own private key, rather than a separate issuer's key — the only option available for a Root CA, since by definition nothing exists above it to sign it. `selfsigned_not_after: "+3650d"` sets the certificate's expiration 3,650 days (10 years) from the moment of generation.
+    mode: "0644"
 
-The **server certificate** for `labapp.com` follows the identical two-step process (CSR, then signing), with different, deliberate extension values:
+# ---------------- Server (leaf) certificate ----------------
+- name: Generate the server private key for {{ domain_name }}
+  community.crypto.openssl_privatekey:
+    path: "{{ server_key_file }}"
+    type: RSA
+    size: "{{ server_key_size }}"
+    mode: "0600"
 
-```yaml
-    subject_alt_name: ["DNS:{{ domain_name }}"]
+- name: Create the server CSR with the FQDN in the Subject Alternative Name
+  community.crypto.openssl_csr:
+    path: "{{ pki_dir }}/{{ domain_name }}.csr"
+    privatekey_path: "{{ server_key_file }}"
+    common_name: "{{ domain_name }}"               # informational only; clients match the SAN
+    organization_name: "{{ pki_org }}"
+    organizational_unit_name: "{{ pki_ou }}"
+    country_name: "{{ pki_country }}"
+    state_or_province_name: "{{ pki_state }}"
+    locality_name: "{{ pki_city }}"
+    subject_alt_name: ["DNS:{{ domain_name }}"]    # RFC 6125 / RFC 9525: the name clients verify
     basic_constraints: ["CA:FALSE"]
+    basic_constraints_critical: true
     key_usage: [digitalSignature, keyEncipherment]
-    extended_key_usage: [serverAuth]
-```
-`subject_alt_name` is the field a TLS client actually checks against the hostname it connected to (see §3.4). `basic_constraints: ["CA:FALSE"]` explicitly forbids this certificate from being used to sign anything else — it can only identify a server, never issue further certificates. `extended_key_usage: [serverAuth]` further restricts its permitted use to exactly one purpose: authenticating a TLS server.
+    key_usage_critical: true
+    extended_key_usage: [serverAuth]               # usable for TLS servers only
 
-```yaml
 - name: Sign the server certificate with the Root CA
   community.crypto.x509_certificate:
+    path: "{{ server_cert_file }}"
+    csr_path: "{{ pki_dir }}/{{ domain_name }}.csr"
     provider: ownca
     ownca_path: "{{ root_ca_cert_file }}"
     ownca_privatekey_path: "{{ pki_dir }}/root-ca.key"
     ownca_not_after: "+{{ server_cert_valid_days }}d"
+    mode: "0644"
+
+# ---------------- Evidence (read-only) ----------------
+- name: Certificate evidence
+  when: not ansible_check_mode   # tests read LIVE state; skip them in --check
+  tags: [verify]                 # run alone with: ansible-playbook site.yml --tags verify
+  block:
+    - name: Verify the server certificate chains to the Root CA
+      ansible.builtin.command: openssl verify -CAfile {{ root_ca_cert_file }} {{ server_cert_file }}
+      register: pki_chain_check
+      changed_when: false                              # read-only check -> never "changed"
+
+    - name: Read the issued certificate
+      community.crypto.x509_certificate_info:
+        path: "{{ server_cert_file }}"
+      register: pki_server_cert
+
+    - name: Show certificate evidence
+      ansible.builtin.debug:
+        msg:
+          - "chain  : {{ pki_chain_check.stdout }}"
+          - "subject: {{ pki_server_cert.subject }}"
+          - "issuer : {{ pki_server_cert.issuer.commonName }}"
+          - "SAN    : {{ pki_server_cert.subject_alt_name }}"
+          - "expires: {{ pki_server_cert.not_after }}"
 ```
-`provider: ownca` signs this CSR using a *different* certificate's private key — specifically, the Root CA's — rather than signing it with its own key. This is the exact operation that establishes the chain of trust described in §3.3: from this point forward, the resulting certificate carries a signature verifiable against the Root CA's public key.
+
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `- name: Create the CA working directory (root-only)` / `mode: "0700"` | `ansible.builtin.file` with `state: directory` ensures the path exists with the specified ownership and permission bits; `0700` means only the owning user (root) may read, write, or list the directory. | Make a locked folder that only root can even look inside. |
+| `- name: Generate the Root CA private key` | `community.crypto.openssl_privatekey` generates an RSA private key at `path`, of the given `type` and `size`, only if a valid key matching those parameters doesn't already exist there. | Create the certificate authority's secret signing key — but only if it doesn't already exist correctly. |
+| `type: RSA` / `size: "{{ root_ca_key_size }}"` | Specifies the RSA algorithm and the key length in bits (4096, from the role's own `defaults/main.yml`). | What kind of key, and how strong. |
+| `mode: "0600"` | Restricts the key file to read/write by its owner only — one notch stricter than the folder, since this file is the most sensitive artifact in the project. | Only root can even read this file. |
+| `- name: Create the Root CA signing request (CA extensions)` | `community.crypto.openssl_csr` generates a Certificate Signing Request — a declaration of the desired certificate's contents and extensions, paired with the public half of the given private key. | Fill out the application form for the certificate authority's own certificate. |
+| `common_name: / organization_name: / organizational_unit_name: / country_name: / state_or_province_name: / locality_name:` | Populate the X.509 Subject fields of the CSR from project variables. | The name and address printed on the certificate. |
+| `basic_constraints: ["CA:TRUE", "pathlen:0"]` | Sets the `basicConstraints` extension: `CA:TRUE` marks this as a certificate authority; `pathlen:0` limits how many additional CA certificates may exist below it in a chain to zero (it may sign end-entity certificates, not further CAs). | "This is allowed to sign other certificates, but only ordinary ones, not more certificate authorities." |
+| `basic_constraints_critical: true` | Marks the extension critical per RFC 5280: any certificate-processing software that doesn't understand it must reject the certificate outright rather than ignore the restriction. | This rule isn't optional — enforce it or reject the certificate. |
+| `key_usage: [keyCertSign, cRLSign]` | Sets the `keyUsage` extension, restricting the key's permitted cryptographic operations to signing certificates and certificate revocation lists only. | This key may only be used to sign certificates — nothing else. |
+| `key_usage_critical: true` | Marks that extension critical too. | Also not optional. |
+| `create_subject_key_identifier: true` | Adds a `subjectKeyIdentifier` extension — a hash of the public key, used by other software to reference this specific key unambiguously. | Gives the key a unique fingerprint-style ID inside the certificate. |
+| `- name: Self-sign the Root CA certificate` | `community.crypto.x509_certificate` issues the actual certificate from the CSR. | Actually create the certificate authority's certificate. |
+| `provider: selfsigned` | Signs the certificate using the *same* private key the CSR was built from — the only option for a Root CA, since nothing exists above it to sign it. | The certificate authority vouches for itself. |
+| `selfsigned_not_after: "+{{ root_ca_valid_days }}d"` | Sets the certificate's expiration to the given number of days from generation. | How long until this certificate authority's certificate expires. |
+| `mode: "0644"` | Sets the certificate file's permissions to world-readable — certificates are public data by design. | Anyone can read this file, since certificates aren't secret. |
+| `- name: Generate the server private key for {{ domain_name }}` | Identical mechanism to the Root CA key, but for the server, at `server_key_size` (2048 bits — smaller, since this key is replaced far more often). | Create `labapp.com`'s own secret key. |
+| `- name: Create the server CSR with the FQDN in the Subject Alternative Name` | Builds a CSR for the leaf certificate. | Fill out the application form for the website's certificate. |
+| `subject_alt_name: ["DNS:{{ domain_name }}"]` | Sets the `subjectAlternativeName` extension — the field a TLS client actually checks the requested hostname against (see §3.4), rather than the Common Name. | The actual name a browser will check against what you typed. |
+| `basic_constraints: ["CA:FALSE"]` | Explicitly forbids this certificate from being used to sign anything else. | "This certificate may only identify a server — it can never issue other certificates." |
+| `key_usage: [digitalSignature, keyEncipherment]` | Restricts the key to signing data (for the TLS handshake) and encrypting/decrypting a key exchange — the operations a TLS server key performs. | This key may only be used for securing a website connection. |
+| `extended_key_usage: [serverAuth]` | Further restricts the certificate's purpose to server authentication in TLS specifically. | This certificate can only be used to prove "I am a website server." |
+| `- name: Sign the server certificate with the Root CA` | Issues the leaf certificate. | Actually stamp the website's certificate. |
+| `provider: ownca` | Signs using a *different* certificate's private key — the Root CA's, specified by `ownca_path` / `ownca_privatekey_path` — rather than the CSR's own key. | The certificate authority stamps this one, not the website itself. |
+| `ownca_not_after: "+{{ server_cert_valid_days }}d"` | Sets the leaf certificate's expiration (199 days from `group_vars/all.yml`). | How long until the website's certificate expires. |
+| `- name: Certificate evidence` / `when: not ansible_check_mode` / `tags: [verify]` / `block:` | Groups the following read-only checks; `when:` skips them entirely during a `--check` dry run (nothing real exists yet to check); `tags: [verify]` allows re-running just this group later. | A group of proof-gathering steps, skipped during a rehearsal run. |
+| `- name: Verify the server certificate chains to the Root CA` | Runs `openssl verify`, the same signature-chain check described in §3.2, as a shell command. | Mathematically confirm the certificate authority really did sign this certificate. |
+| `changed_when: false` | Overrides Ansible's default assumption that a `command` task always counts as a change, since this one only reads and reports, never modifies anything. | This step never counts as "changing" anything — it just checks. |
+| `- name: Read the issued certificate` | `community.crypto.x509_certificate_info` parses an existing certificate file and returns its fields (subject, issuer, SAN, expiry) as structured data, without modifying anything. | Read back everything the certificate actually says. |
+| `- name: Show certificate evidence` / `ansible.builtin.debug:` / `msg: [...]` | Prints a multi-line message built from the two previous tasks' registered results. | Print a clear summary of what was just proven. |
+
+### 6.10 Role `apache_web` — the backend web server
+
+#### `roles/apache_web/defaults/main.yml`
 
 ```yaml
-- name: Verify the server certificate chains to the Root CA
-  ansible.builtin.command: openssl verify -CAfile {{ root_ca_cert_file }} {{ server_cert_file }}
+# roles/apache_web/defaults/main.yml — safe fallbacks (overridden by group_vars/host_vars).
+apache_package: httpd
+apache_service: httpd
+webpage_message: "Served by Apache."
+```
+
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `apache_package: httpd` | The RPM package name to install — on RHEL-family distributions, the Apache HTTP Server package is named `httpd`, not `apache2`. | The name of the actual software package. |
+| `apache_service: httpd` | The systemd service/unit name used to start, enable, and reload Apache. | The name systemd knows this program by. |
+| `webpage_message: "Served by Apache."` | The lowest-precedence fallback for this variable; overridden in practice by `host_vars/web-vm2.yml`'s more specific value. | A generic placeholder message, only used if nothing more specific is set. |
+
+#### `roles/apache_web/tasks/main.yml`
+
+```yaml
+# roles/apache_web/tasks/main.yml — Milestone 2: backend Apache web server.
+
+- name: Install Apache
+  ansible.builtin.dnf:
+    name: "{{ apache_package }}"
+    state: present
+
+- name: Set the Apache listen port (validated before it is written)
+  ansible.builtin.lineinfile:
+    path: /etc/httpd/conf/httpd.conf
+    regexp: '^Listen\s'                        # replace the existing Listen line...
+    line: "Listen {{ backend_port }}"          # ...with the port from group_vars
+    validate: httpd -t -f %s                   # %s = candidate file; bad syntax is never written
+  notify: Reload Apache
+
+- name: Deploy the backend virtual host
+  ansible.builtin.template:
+    src: vhost.conf.j2
+    dest: "{{ apache_vhost_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Apache                         # handler validates with 'httpd -t' first
+
+- name: Deploy the managed webpage
+  ansible.builtin.template:
+    src: index.html.j2
+    dest: "{{ apache_document_root }}/index.html"
+    owner: root
+    group: root
+    mode: "0644"
+    # static file: Apache serves the new copy immediately, no reload needed
+
+- name: Allow the backend port ONLY from the reverse proxy
+  ansible.posix.firewalld:
+    rich_rule: >-
+      rule family="ipv4" source address="{{ proxy_address }}/32"
+      port port="{{ backend_port }}" protocol="tcp" accept
+    permanent: true                             # survives reboot
+    immediate: true                             # applied now, no firewall reload
+    state: enabled
+
+- name: Ensure Apache is enabled at boot and running
+  ansible.builtin.service:
+    name: "{{ apache_service }}"
+    state: started
+    enabled: true
+
+- name: Apply pending Apache reloads before testing
+  ansible.builtin.meta: flush_handlers
+
+# ---------------- Verification (read-only) ----------------
+- name: Backend verification
+  when: not ansible_check_mode   # tests read LIVE state; skip them in --check
+  tags: [verify]                 # run alone with: ansible-playbook site.yml --tags verify
+  block:
+    - name: Verify the page locally on the web server
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ backend_port }}/"
+        return_content: true
+      register: apache_local
+      failed_when: webpage_marker not in apache_local.content
+
+    - name: Show backend verification result
+      ansible.builtin.debug:
+        msg: "Apache on {{ inventory_hostname }}:{{ backend_port }} -> HTTP {{ apache_local.status }}, marker found"
+```
+
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `- name: Install Apache` / `state: present` | Ensures the `httpd` package is present, checking the RPM database first and installing only if absent. | Make sure Apache is installed, only doing work if it isn't already. |
+| `- name: Set the Apache listen port ...` | `ansible.builtin.lineinfile` finds a line matching `regexp` in an existing file and replaces it (or appends `line` if no match exists), touching no other line in the file. | Find and fix exactly one line, leave everything else untouched. |
+| `regexp: '^Listen\s'` | A regular expression matching any line beginning with the literal word `Listen` followed by whitespace — Apache's own directive for its listening port. | Find the line that controls which door Apache uses. |
+| `line: "Listen {{ backend_port }}"` | The replacement line, with `backend_port` (8080) substituted in. | Change it to port 8080. |
+| `validate: httpd -t -f %s` | Before committing the change, Ansible renders it to a temporary file and runs `httpd -t -f <tempfile>`, Apache's own syntax checker, against that candidate; the real file is only overwritten if the check passes. `%s` is replaced with the temp file's path. | Test the change would actually work before ever touching the real config. |
+| `notify: Reload Apache` | Queues the `Reload Apache` handler to run later in this play, but only if this task actually reported a change. | If this line really changed, remember to tell Apache about it. |
+| `- name: Deploy the backend virtual host` | `ansible.builtin.template` renders `vhost.conf.j2` (substituting all its `{{ variables }}`) and writes the result to `dest`, only overwriting the file if the rendered content differs from what's already there. | Fill out and deliver Apache's site-specific settings file. |
+| `owner: root / group: root / mode: "0644"` | Sets file ownership and permission bits: owner can read/write, everyone else can only read. | Root owns it; anyone can look, only root can change it. |
+| `- name: Deploy the managed webpage` | Same templating mechanism, applied to the actual HTML content, with no `notify:` — a static content file needs no service reload to take effect, since Apache reads it fresh on every request. | Deliver the actual webpage; no need to tell Apache anything afterward. |
+| `- name: Allow the backend port ONLY from the reverse proxy` | `ansible.posix.firewalld` with a `rich_rule` — a firewalld rule with conditions more specific than a plain port toggle. | Build a locked door that only opens for one specific visitor. |
+| `rule family="ipv4" source address="{{ proxy_address }}/32" port port="{{ backend_port }}" protocol="tcp" accept` | Accepts TCP traffic on `backend_port` only when its source IP exactly matches `proxy_address` (`/32` denotes a single address, not a range); traffic from any other source hits the zone's default policy (reject/drop). | Only let traffic in on this port if it came from the proxy specifically. |
+| `permanent: true` | Writes the rule to firewalld's persistent configuration, so it survives a reboot. | Keep this rule even after restarting. |
+| `immediate: true` | Also applies the rule to the currently running firewalld instance immediately, without needing a reload. | Also apply it right now, no restart needed. |
+| `- name: Ensure Apache is enabled at boot and running` | `state: started` requires the service to be running now; `enabled: true` requires systemd to auto-start it on every future boot — two independent conditions checked and set together. | Running now, and set to always start automatically from now on. |
+| `- name: Apply pending Apache reloads before testing` / `ansible.builtin.meta: flush_handlers` | Forces any handler already queued by earlier tasks in this play to execute immediately, rather than waiting for the play's natural end. | Do any pending "only if changed" reminders right now, since the next step needs them done first. |
+| `- name: Backend verification` / `when: not ansible_check_mode` / `tags: [verify]` / `block:` | Groups the verification tasks; skipped entirely during a `--check` dry run. | A group of proof-gathering steps, skipped during a rehearsal run. |
+| `- name: Verify the page locally on the web server` | `ansible.builtin.uri` performs an HTTP GET to Apache directly on the loopback address and its own port, capturing the response body via `return_content: true`. | Fetch the page from the machine itself, and read what came back. |
+| `register: apache_local` | Stores the entire result (status code, body, headers) in a variable named `apache_local` for use by the next task. | Keep the result in a labeled box for later. |
+| `failed_when: webpage_marker not in apache_local.content` | Overrides the default success condition; this task fails unless the secret marker string appears in the response body. | Fail this step unless the "proof word" is actually present in the page. |
+| `- name: Show backend verification result` / `ansible.builtin.debug:` / `msg: "..."` | Prints a one-line summary interpolating the hostname, port, and captured status code. | Print a short confirmation of what was found. |
+
+#### `roles/apache_web/handlers/main.yml`
+
+```yaml
+# roles/apache_web/handlers/main.yml — run ONCE at the end of the play, and only
+# if a task reported "changed" and notified them. Handlers run in the order they
+# are written here, so validation always runs before the reload.
+
+- name: Validate Apache configuration
+  ansible.builtin.command: httpd -t
   changed_when: false
+  listen: Reload Apache                  # both handlers answer the same notification
+
+- name: Reload Apache service
+  ansible.builtin.service:
+    name: "{{ apache_service }}"
+    state: reloaded                      # graceful: in-flight requests are not dropped
+  listen: Reload Apache
 ```
-`openssl verify` performs exactly the mathematical check described in §3.2 — confirming the server certificate's signature is valid against the given Root CA certificate's public key. This is a read-only check, hence `changed_when: false`.
 
-> [!warning] A real consequence of this design, observed directly in this project
-> Every time the machine holding `pki_dir` is rebuilt from a clean state (no prior files present), this role generates a **completely new** key pair for the Root CA — the *name* `AirNav DAS Lab Root CA` stays the same because it's just a text field, but the underlying cryptographic key is entirely different. Any client that had previously trusted the old Root CA certificate will reject certificates signed by the new one with a signature-verification failure, even though the issuer name matches — because trust was established for a specific key, not a name. This actually happened during this project's own repeatability testing, and required re-importing the newly generated Root CA into the browser used for manual verification.
->
-> Note that this only ever affects a **personal laptop browser** used for an optional visual check — the actual client the project targets, `control-vm3`, is re-trusted automatically on every playbook run by the `client_trust` role in §10, with no manual step at all. [[Milestone 5 — Client Landing Zone#Scope note: this is the entire graded requirement — a personal laptop is not|See here]] for the laptop-side convenience script that automates the re-trust step for Chromium.
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `- name: Validate Apache configuration` / `ansible.builtin.command: httpd -t` | Runs Apache's built-in syntax checker as a shell command. | Ask Apache itself, "is your configuration file valid right now?" |
+| `changed_when: false` | A `command` task is assumed "changed" by default since Ansible can't inspect its effect; this line overrides that, since running a syntax check never modifies anything. | This never counts as "changing" anything — it's just a check. |
+| `listen: Reload Apache` (both handlers) | Both handlers subscribe to the same notification name. When `notify: Reload Apache` fires anywhere in the role, every handler with this `listen:` value runs, **in the order written in this file** — validation, then reload — regardless of notification order. | Both of these respond to the same "something changed" signal, and always run in this fixed order. |
+| `- name: Reload Apache service` / `state: reloaded` | Sends Apache a reload signal (rather than `restarted`), which re-reads configuration without terminating existing connections. | Tell Apache to pick up the new settings without dropping anyone currently connected. |
 
----
+#### `roles/apache_web/templates/vhost.conf.j2`
 
-## 9. Milestone 3 — the NGINX Role, Line by Line
+```apacheconf
+# {{ ansible_managed }}
+# Backend vhost for {{ domain_name }} — only NGINX ({{ proxy_address }}) reaches this port.
+
+<VirtualHost *:{{ backend_port }}>
+    ServerName {{ domain_name }}
+    DocumentRoot {{ apache_document_root }}
+
+    # Response header that proves which backend answered (visible to the client through NGINX)
+    Header always set X-Backend-Server "{{ inventory_hostname }}"
+
+    # %h = TCP peer (the proxy); X-Forwarded-For = the real client NGINX passed on
+    LogFormat "%h xff=\"%{X-Forwarded-For}i\" proto=%{X-Forwarded-Proto}i \"%r\" %>s" proxied
+    CustomLog logs/{{ domain_name }}_access.log proxied
+    ErrorLog  logs/{{ domain_name }}_error.log
+</VirtualHost>
+```
+
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `# {{ ansible_managed }}` | Renders to a standard "this file is managed by Ansible" banner comment, using a built-in Ansible variable — a convention warning anyone reading the deployed file not to hand-edit it. | A warning label: "don't edit this file by hand, Ansible owns it." |
+| `<VirtualHost *:{{ backend_port }}>` | Opens an Apache `VirtualHost` block bound to all local addresses (`*`) on `backend_port` (8080). | Defines a website configuration that answers on port 8080. |
+| `ServerName {{ domain_name }}` | Sets the hostname this virtual host responds to. | This site answers to the name `labapp.com`. |
+| `DocumentRoot {{ apache_document_root }}` | Sets the filesystem directory Apache serves files from for this virtual host. | Where the actual page files are. |
+| `Header always set X-Backend-Server "{{ inventory_hostname }}"` | Adds a custom HTTP response header on every response, containing this host's inventory name (`web-vm2`) — `always` ensures it's set regardless of response status. | Stamps every response with "this came from web-vm2," visible even through the proxy. |
+| `LogFormat "%h xff=... proto=... \"%r\" %>s" proxied` | Defines a named (`proxied`) Apache log format string; `%h` is the direct TCP peer, `%{X-Forwarded-For}i` and `%{X-Forwarded-Proto}i` read the headers NGINX adds, `%r` the request line, `%>s` the final HTTP status. | Defines what gets written to the log, including the *real* client info NGINX forwards. |
+| `CustomLog logs/{{ domain_name }}_access.log proxied` | Directs access logging for this virtual host to a domain-named file, using the format just defined. | Where successful-request logs go. |
+| `ErrorLog logs/{{ domain_name }}_error.log` | Directs error logging to a separate, domain-named file. | Where error logs go. |
+| `</VirtualHost>` | Closes the block opened above. | Ends this site's configuration. |
+
+#### `roles/apache_web/templates/index.html.j2`
+
+```html
+<!-- {{ ansible_managed }} -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ webpage_title }}</title>
+</head>
+<body>
+  <h1>{{ webpage_title }}</h1>
+  <p>{{ webpage_message }}</p>
+  <ul>
+    <li>FQDN: {{ domain_name }}</li>
+    <li>Backend: {{ inventory_hostname }} ({{ ansible_host }}) port {{ backend_port }}</li>
+    <li>OS: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}</li>
+  </ul>
+  <p>{{ webpage_marker }}</p>
+</body>
+</html>
+```
+
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `<!-- {{ ansible_managed }} -->` | The same managed-file banner, as an HTML comment. | "Don't hand-edit this," for an HTML file. |
+| `<title>{{ webpage_title }}</title>` / `<h1>{{ webpage_title }}</h1>` | Substitutes the `webpage_title` variable into both the browser tab title and the page's main heading. | The page's headline text, shown in two places. |
+| `<p>{{ webpage_message }}</p>` | Substitutes `webpage_message` — resolved, via variable precedence, from `host_vars/web-vm2.yml`. | A sentence specific to this backend machine. |
+| `<li>FQDN: {{ domain_name }}</li>` | Prints the configured domain name. | Shows what domain this page is meant to answer to. |
+| `<li>Backend: {{ inventory_hostname }} ({{ ansible_host }}) port {{ backend_port }}</li>` | Prints this host's inventory name, its address, and the port it's listening on — `inventory_hostname` and `ansible_host` are reserved Ansible variables referring to the current host in the loop. | Shows exactly which machine and port generated this page. |
+| `<li>OS: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}</li>` | Prints two facts gathered from the machine in Play 0 — the OS name and version. | Shows what operating system this machine runs. |
+| `<p>{{ webpage_marker }}</p>` | Prints the secret marker string every automated test searches for. | The "proof word" printed on the page for the tests to find. |
+
+> [!warning] A real idempotency trap avoided here
+> An early draft of this template printed a live timestamp (`{{ ansible_date_time.iso8601 }}`). Because that value differs on every single run, the rendered file would differ every time too, making this `template` task report `changed` on every run forever — breaking the entire idempotency property demonstrated in [[Milestone 6 — Repeatability Check]]. Only values that describe the *desired state* belong in a managed template — never a value that changes just because time passed.
+
+### 6.11 Role `nginx_proxy` — the reverse proxy and HTTPS termination
+
+#### `roles/nginx_proxy/defaults/main.yml`
 
 ```yaml
+# roles/nginx_proxy/defaults/main.yml
+nginx_package: nginx
+nginx_service: nginx
+```
+
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `nginx_package: nginx` | The RPM package name to install. | The name of the software package. |
+| `nginx_service: nginx` | The systemd service/unit name. | The name systemd knows this program by. |
+
+#### `roles/nginx_proxy/tasks/main.yml`
+
+```yaml
+# roles/nginx_proxy/tasks/main.yml — Milestones 3 + 4: NGINX reverse proxy with HTTPS.
+
 - name: Install NGINX and the SELinux Python bindings used by seboolean
   ansible.builtin.dnf:
     name:
       - "{{ nginx_package }}"
-      - python3-libsemanage
-```
-A single task can install a list of packages, not just one. `python3-libsemanage` is not NGINX-related software; it is a dependency required by a *different* task later in this same role (the SELinux boolean task below), included here so the entire role's requirements are satisfied at the outset.
+      - python3-libsemanage          # required by ansible.posix.seboolean on the managed host
+    state: present
 
-```yaml
+# ---------------- TLS material (Milestone 4) ----------------
+- name: Create the TLS directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ nginx_tls_dir }}", mode: "0755" }
+    - { path: "{{ nginx_tls_dir }}/private", mode: "0700" }   # key dir: root only
+
 - name: Deploy the server certificate and the CA chain
   ansible.builtin.copy:
-    src: "{{ item.src }}"
+    src: "{{ item.src }}"            # 'src' is read on the CONTROL node (where the CA lives)
     dest: "{{ item.dest }}"
-    mode: "0644"
+    owner: root
+    group: root
+    mode: "0644"                     # certificates are public
   loop:
     - { src: "{{ server_cert_file }}", dest: "{{ nginx_cert_path }}" }
     - { src: "{{ root_ca_cert_file }}", dest: "{{ nginx_chain_path }}" }
-```
-`loop:` executes the same task once per item in a list, substituting `item` with each entry in turn — this avoids writing two nearly identical `copy` tasks by hand. Critically, `src:` in a `copy` task is read from the **control node** (`control-vm3`, where the certificate authority resides), while `dest:` is written on the **managed node** (`proxy-vm1`) — this is the one point in the entire project where a file physically transfers between two different machines, because the certificate was generated on one machine and is required by a different one.
+  notify: Reload NGINX
 
-```yaml
 - name: Deploy the server private key
   ansible.builtin.copy:
     src: "{{ server_key_file }}"
     dest: "{{ nginx_key_path }}"
-    mode: "0600"
-  no_log: true
-```
-Identical mechanism, applied to the private key, with `mode: "0600"` (owner-only access) and `no_log: true` — the latter instructs Ansible never to print this task's parameters or results to the console or any log, a safeguard against a private key's contents appearing in a terminal transcript or CI log by accident.
+    owner: root
+    group: root
+    mode: "0600"                     # read by the NGINX master process (root) only
+  no_log: true                       # never print key material in the output
+  notify: Reload NGINX
 
-```yaml
+# ---------------- Reverse proxy config (Milestone 3) ----------------
 - name: Deploy nginx.conf (validated with nginx -t before it replaces the live file)
   ansible.builtin.template:
     src: nginx.conf.j2
     dest: /etc/nginx/nginx.conf
-    validate: nginx -t -c %s
-```
-This renders NGINX's **entire** configuration file from one template, rather than a fragment. `validate: nginx -t -c %s` runs NGINX's own syntax and semantic checker against the rendered candidate file *before* it replaces the live one — this check can only meaningfully validate a complete, self-contained configuration, which is why the role manages the whole file rather than a partial snippet.
+    owner: root
+    group: root
+    mode: "0644"
+    validate: nginx -t -c %s         # candidate file is tested; a broken config is never installed
+  notify: Reload NGINX
 
-```yaml
+- name: Open HTTP and HTTPS in firewalld
+  ansible.posix.firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop:
+    - "{{ proxy_http_port }}"
+    - "{{ proxy_https_port }}"
+
 - name: Allow NGINX to open connections to the backend (SELinux)
   ansible.posix.seboolean:
-    name: httpd_can_network_relay
+    name: httpd_can_network_relay    # narrowest boolean that permits proxying to HTTP ports
     state: true
-    persistent: true
-```
-**SELinux** is a mandatory access control system present on RHEL-family distributions (including AlmaLinux) that enforces policy restrictions independent of, and in addition to, standard Unix file permissions. By default, SELinux policy prevents a web-server process from initiating an outbound network connection to another host — even though this is exactly what a reverse proxy must do. `httpd_can_network_relay` is a specific, named policy exception ("boolean") that permits precisely this behavior and nothing broader. A wider boolean (`httpd_can_network_connect`) exists and would also satisfy this requirement, but grants more permission than NGINX actually needs; the narrower boolean is used deliberately, following the security principle of least privilege. `persistent: true` writes the setting so it survives a reboot.
+    persistent: true                 # survives reboot (writes the policy store)
 
-### The NGINX configuration template
+- name: Ensure NGINX is enabled at boot and running
+  ansible.builtin.service:
+    name: "{{ nginx_service }}"
+    state: started
+    enabled: true
+
+- name: Apply pending NGINX reloads before testing
+  ansible.builtin.meta: flush_handlers
+
+# ---------------- Proxy-path verification (read-only) ----------------
+- name: Proxy-path verification
+  when: not ansible_check_mode   # tests read LIVE state; skip them in --check
+  tags: [verify]                 # run alone with: ansible-playbook site.yml --tags verify
+  block:
+    - name: Proxy -> backend reachability (firewall rule allows this host)
+      ansible.builtin.uri:
+        url: "http://{{ backend_address }}:{{ backend_port }}/"
+        return_content: true
+      register: proxy_to_backend
+      failed_when: webpage_marker not in proxy_to_backend.content
+
+    - name: Full path through NGINX on this host (HTTPS -> Apache)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ proxy_https_port }}/"
+        headers:
+          Host: "{{ domain_name }}"      # select our server block
+        validate_certs: false            # cert trust is proven from the client in Milestone 5
+        return_content: true
+      register: through_nginx
+      failed_when: >-
+        webpage_marker not in through_nginx.content or
+        through_nginx.x_backend_server | default('') != groups['webserver'][0]
+
+    - name: Show proxy verification result
+      ansible.builtin.debug:
+        msg:
+          - "direct backend : HTTP {{ proxy_to_backend.status }}"
+          - "through NGINX  : HTTP {{ through_nginx.status }} answered by {{ through_nginx.x_backend_server }}"
+```
+
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `- name: Install NGINX and the SELinux Python bindings used by seboolean` / `name: [...]` | Installs a list of two packages in one task: NGINX itself, and `python3-libsemanage` — a dependency required later in this same file by `ansible.posix.seboolean`, but absent from a minimal AlmaLinux install by default. | Install NGINX, and also a helper library a later step in this file needs. |
+| `- name: Create the TLS directories` / `loop: [...]` | `loop:` repeats this one task once per list item, substituting `item` each time — here, building two directories with different permissions in one task definition instead of two. | Make two folders, one public, one locked, using one instruction repeated twice. |
+| `{ path: "{{ nginx_tls_dir }}", mode: "0755" }` | The certificate directory, world-readable (owner: read/write/list; group and others: read/list). | The public certificate folder. |
+| `{ path: "{{ nginx_tls_dir }}/private", mode: "0700" }` | The key subdirectory, owner-only. | The locked key folder. |
+| `- name: Deploy the server certificate and the CA chain` / `loop: [...]` | Copies two files in one task: the server certificate and the Root CA certificate (the "chain"). | Deliver two public certificate files. |
+| `src: "{{ item.src }}"` | Critically, `src:` in an `ansible.builtin.copy` task is read from the **control node** — where the CA lives — not the managed node the task is running against. | The file being copied comes from the machine that made it, not the one receiving it. |
+| `mode: "0644"` | World-readable — appropriate, since certificates are public data. | Anyone can read these; they're not secret. |
+| `notify: Reload NGINX` | Queues the reload handler if this task actually copies a new/changed file. | If the certificate changed, remember to tell NGINX. |
+| `- name: Deploy the server private key` | Copies the private key, at the tighter `0600` permission. | Deliver the one genuinely secret file. |
+| `no_log: true` | Suppresses Ansible from ever printing this task's parameters or results to the console or any log file. | Never let this key's contents show up in any output, even by accident. |
+| `- name: Deploy nginx.conf ...` / `validate: nginx -t -c %s` | Renders the *entire* NGINX configuration from one template, then tests the rendered candidate with NGINX's own checker before overwriting the live file — only possible because the whole file, not a fragment, is managed here. | Build the complete settings file, test it for real, and only then replace the live one. |
+| `- name: Open HTTP and HTTPS in firewalld` / `loop: [...]` | Opens two plain ports (no source restriction, unlike the backend's rich rule), since this machine is meant to be reachable from anywhere. | Let anyone knock on ports 80 and 443 — this is the public-facing machine. |
+| `- name: Allow NGINX to open connections to the backend (SELinux)` | `ansible.posix.seboolean` toggles a named SELinux policy boolean. | Grant one specific extra permission the security system normally denies. |
+| `name: httpd_can_network_relay` | The specific boolean permitting an `httpd_t`-labeled process (which NGINX runs as) to make outbound connections to HTTP-labeled ports — deliberately the narrowest boolean that satisfies the requirement, rather than the broader `httpd_can_network_connect`. | The specific, narrow permission slip NGINX needs to reach the backend — nothing broader. |
+| `persistent: true` | Writes the boolean's state into the SELinux policy store so it survives a reboot. | Keep this permission even after restarting. |
+| `- name: Ensure NGINX is enabled at boot and running` | Same dual condition as Apache's equivalent task. | Running now, and always starts automatically going forward. |
+| `- name: Proxy-path verification` / `when: not ansible_check_mode` / `tags: [verify]` | Groups the two HTTP checks that follow, skipped during a dry run. | A group of proof-gathering steps, skipped during a rehearsal run. |
+| `- name: Proxy -> backend reachability ...` | Fetches the page directly from Apache's address, from the proxy machine — proving the firewall rule that permits exactly this connection actually works. | Confirm the proxy really can reach the backend. |
+| `- name: Full path through NGINX on this host (HTTPS -> Apache)` | Fetches the page over HTTPS from the proxy's own loopback address, deliberately with `validate_certs: false`. | Confirm a request through the front door actually reaches the kitchen and comes back correctly. |
+| `headers: Host: "{{ domain_name }}"` | Explicitly sets the HTTP `Host` header so NGINX selects the correct `server` block (since the request targets `127.0.0.1`, not the real domain name). | Ask specifically for the `labapp.com` site, not just "whatever's on this IP." |
+| `validate_certs: false` | Deliberately skips certificate trust validation for this specific check — this task's job is only to prove NGINX terminates TLS and forwards correctly, not that a client trusts the result (that's proven separately, in the `verify` role). | Don't check if the certificate is trusted yet — that's tested elsewhere; just check the connection itself works. |
+| `failed_when: webpage_marker not in through_nginx.content or through_nginx.x_backend_server \| default('') != groups['webserver'][0]` | Fails unless *both* the marker string is present *and* the `X-Backend-Server` response header equals the name of the first (only) host in the `webserver` group. `default('')` avoids an error if the header is entirely absent. | Fail unless the response really has the right content *and* really came from the right backend machine. |
+| `- name: Show proxy verification result` | Prints a two-line summary of both checks' status codes. | Print a short confirmation of both results. |
+
+#### `roles/nginx_proxy/handlers/main.yml`
+
+```yaml
+# roles/nginx_proxy/handlers/main.yml
+# Runs once at the end of the play (or at flush_handlers), only when notified.
+- name: Reload NGINX
+  ansible.builtin.service:
+    name: "{{ nginx_service }}"
+    state: reloaded      # SIGHUP: new workers get the new config/cert, open connections finish
+```
+
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `- name: Reload NGINX` / `state: reloaded` | Sends NGINX's master process a reload signal (SIGHUP internally): it spawns new worker processes using the updated configuration and certificate, while existing workers finish handling any in-flight connections before exiting. | Tell NGINX to start using the new settings, without cutting off anyone mid-request. |
+
+#### `roles/nginx_proxy/templates/nginx.conf.j2`
 
 ```nginx
-upstream apache_backend {
-    server {{ backend_address }}:{{ backend_port }};
+# {{ ansible_managed }}
+# Whole-file management: nothing outside this file (e.g. a stray conf.d/*.conf)
+# can change how the proxy behaves, which makes drift detectable and reversible.
+
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log notice;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 1024;
 }
-```
-Defines a named group of one or more backend servers NGINX can forward requests to. `{{ backend_address }}` and `{{ backend_port }}` are substituted from the inventory-derived variables, so this file never contains a hardcoded IP address.
 
-```nginx
-server {
-    listen      {{ proxy_http_port }};
-    server_name {{ domain_name }};
-    return 301 https://$host$request_uri;
-}
-```
-This server block handles plain HTTP requests (port 80) and responds with an HTTP 301 status code — a **permanent redirect** — to the equivalent HTTPS URL. No content is ever served over the unencrypted connection; its only function is to redirect.
+http {
+    include      /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    sendfile     on;
+    server_tokens off;                        # hide the NGINX version
 
-```nginx
-server {
-    listen      {{ proxy_https_port }} ssl;
-    server_name {{ domain_name }};
-    ssl_certificate     {{ nginx_cert_path }};
-    ssl_certificate_key {{ nginx_key_path }};
+    log_format proxied '$remote_addr "$request" $status -> $upstream_addr';
+    access_log /var/log/nginx/access.log proxied;
 
-    location / {
-        proxy_pass http://apache_backend;
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+    upstream apache_backend {
+        server {{ backend_address }}:{{ backend_port }};   # from the inventory via group_vars
+    }
+
+    # --- Port {{ proxy_http_port }}: redirect everything to HTTPS -----------
+    server {
+        listen      {{ proxy_http_port }};
+        server_name {{ domain_name }};
+        return 301 https://$host$request_uri;
+    }
+
+    # --- Port {{ proxy_https_port }}: TLS termination + reverse proxy --------
+    server {
+        listen      {{ proxy_https_port }} ssl;
+        server_name {{ domain_name }};
+
+        ssl_certificate     {{ nginx_cert_path }};
+        ssl_certificate_key {{ nginx_key_path }};
+        ssl_protocols       {{ nginx_ssl_protocols }};
+        # Ciphers are left to the AlmaLinux system-wide crypto policy (PROFILE=SYSTEM).
+
+        location / {
+            proxy_pass http://apache_backend;
+            proxy_set_header Host              $host;                       # original name
+            proxy_set_header X-Real-IP         $remote_addr;                # real client IP
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;  # client chain
+            proxy_set_header X-Forwarded-Proto $scheme;                     # "https"
+        }
     }
 }
 ```
-This is the server block that terminates TLS: `listen ... ssl` accepts encrypted connections, and `ssl_certificate` / `ssl_certificate_key` specify which certificate and private key to present during the TLS handshake. `proxy_pass` forwards the (now-decrypted) request to the `apache_backend` group defined earlier. The four `proxy_set_header` lines add HTTP headers to the forwarded request that would otherwise be lost: without them, Apache would only ever observe that a connection arrived from the proxy's own IP address, with no information about the original client, the original hostname requested, or whether the original connection was encrypted. `$remote_addr`, `$proxy_add_x_forwarded_for`, `$host`, and `$scheme` are NGINX's own built-in variables, populated automatically from the incoming connection.
 
----
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `user nginx;` | The Linux user account NGINX's worker processes run as, after the root-owned master process drops privileges. | NGINX itself runs as a low-privilege account, not root. |
+| `worker_processes auto;` | Spawns one worker process per detected CPU core. | Use the machine's CPU efficiently. |
+| `events { worker_connections 1024; }` | Sets the maximum simultaneous connections each worker process may handle. | A ceiling on how many connections at once. |
+| `include /etc/nginx/mime.types;` / `default_type application/octet-stream;` | Loads the standard file-extension-to-MIME-type mapping, with a fallback type for anything unrecognized. | Knows how to correctly label file types sent to browsers. |
+| `sendfile on;` | Enables the kernel `sendfile()` system call for serving static files, avoiding an extra copy through userspace. | A performance optimization for serving files. |
+| `server_tokens off;` | Omits the NGINX version number from error pages and the `Server` response header. | Don't advertise exactly which NGINX version is running. |
+| `log_format proxied '$remote_addr "$request" $status -> $upstream_addr';` | Defines a named log format using NGINX's built-in variables: the client's TCP address, the raw request line, the response status, and the address the request was proxied to. | Defines what info gets written to the access log. |
+| `access_log /var/log/nginx/access.log proxied;` | Applies that log format to the main access log. | Where those logs get written. |
+| `upstream apache_backend { server {{ backend_address }}:{{ backend_port }}; }` | Defines a named upstream group with one member, resolved from the inventory-derived variables. | Gives a nickname to "the backend server," so it isn't hardcoded elsewhere in this file. |
+| `server { listen {{ proxy_http_port }}; ... return 301 https://$host$request_uri; }` | A server block bound to the HTTP port; unconditionally issues an HTTP 301 (permanent redirect) response to the same host and path, but over HTTPS. `$host` and `$request_uri` are NGINX's own built-in variables for the requested hostname and path. | Anyone arriving on the insecure door gets sent straight to the secure one. |
+| `server { listen {{ proxy_https_port }} ssl; ... }` | A server block bound to the HTTPS port, with `ssl` enabling TLS termination for this block. | This is the actual, secure entry point. |
+| `ssl_certificate {{ nginx_cert_path }};` / `ssl_certificate_key {{ nginx_key_path }};` | Specifies the certificate and private key files NGINX presents during the TLS handshake. | Which certificate and key to show visitors. |
+| `ssl_protocols {{ nginx_ssl_protocols }};` | Restricts negotiable TLS protocol versions to the list from `group_vars/proxy.yml` (TLSv1.2, TLSv1.3). | Only allow modern encryption versions. |
+| `location / { proxy_pass http://apache_backend; ... }` | Matches every request path (`/`); `proxy_pass` forwards the decrypted request to the named upstream group over plain HTTP. | Send every request on to the backend server. |
+| `proxy_set_header Host $host;` | Preserves the originally-requested hostname in the forwarded request, since NGINX's own connection to Apache would otherwise use its own default. | Tells Apache which website name was actually requested. |
+| `proxy_set_header X-Real-IP $remote_addr;` | Adds a custom header carrying the actual client's IP address. | Lets Apache know who the real visitor is, not just "the proxy." |
+| `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` | Appends the client's address to (or creates) a standard `X-Forwarded-For` chain header, used by the vhost's custom log format. | A standard way of passing along "who really asked for this," even through multiple proxies. |
+| `proxy_set_header X-Forwarded-Proto $scheme;` | Passes along whether the original client connection used `http` or `https` — `$scheme` reflects the *original* incoming connection's protocol. | Tells Apache the visitor actually arrived securely, even though the backend hop itself is plain HTTP. |
 
-## 10. Milestone 5 — the Client Role, Line by Line
+### 6.12 Role `client_trust` — name resolution and Root CA trust on the client
+
+#### `roles/client_trust/defaults/main.yml`
 
 ```yaml
+# roles/client_trust/defaults/main.yml
+client_trust_anchor: "/etc/pki/ca-trust/source/anchors/lab-root-ca.crt"
+```
+
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `client_trust_anchor: "/etc/pki/ca-trust/source/anchors/lab-root-ca.crt"` | The role's own lowest-precedence fallback path — overridden in practice by `group_vars/client.yml`'s more specific value (`airnav-das-lab-root-ca.crt`). | A generic default filename, only used if nothing more specific overrides it. |
+
+#### `roles/client_trust/tasks/main.yml`
+
+```yaml
+# roles/client_trust/tasks/main.yml — Milestone 5: name resolution + trust on the client.
+
 - name: Map {{ domain_name }} to the NGINX proxy in /etc/hosts
   ansible.builtin.lineinfile:
     path: /etc/hosts
+    # Match ONLY a line that ends with our FQDN; every other line is left untouched.
     regexp: '^\S+\s+{{ domain_name | regex_escape }}$'
     line: "{{ proxy_address }} {{ domain_name }}"
-    backup: true
-```
-`/etc/hosts` is a plain-text file consulted by the operating system's name-resolution process before any external DNS server is queried; an entry here maps a hostname directly to an IP address for this specific machine only. The `regexp` pattern is deliberately narrow: `^\S+` matches the address at the start of a line, `\s+` matches the separating whitespace, and `{{ domain_name }}$` requires the line to end exactly with this domain name and nothing else — this ensures only a line that already maps this specific domain gets replaced, and every other line in the file (mapping `localhost` or other hosts) is left untouched. `backup: true` saves a timestamped copy of the file before any modification, independent of Ansible's own change tracking.
+    state: present
+    backup: true            # keep a timestamped copy whenever the file changes
 
-```yaml
 - name: Place the Root CA in the system trust anchors
   ansible.builtin.copy:
     src: "{{ root_ca_cert_file }}"
     dest: "{{ client_trust_anchor }}"
+    owner: root
+    group: root
+    mode: "0644"
   notify: Update CA trust
+
+- name: Rebuild the trust bundle now (the verify role needs it in this same run)
+  ansible.builtin.meta: flush_handlers
 ```
-This copies the Root CA's public certificate (never its private key — the private key never leaves the machine that generated it) into a directory the operating system treats as a source of trust anchors.
+
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `- name: Map {{ domain_name }} to the NGINX proxy in /etc/hosts` | `ansible.builtin.lineinfile` targets the operating system's static hostname-to-address mapping file, consulted before any external DNS query. | Adds a "cheat sheet" entry so this machine knows where `labapp.com` is, without asking the internet. |
+| `regexp: '^\S+\s+{{ domain_name \| regex_escape }}$'` | A regular expression matching a line consisting of some non-whitespace token, then whitespace, then the domain name and nothing else. `regex_escape` escapes any characters in `domain_name` that would otherwise have special meaning in a regex (like a literal dot). | Finds only the one line that maps this exact domain — nothing else in the file is touched. |
+| `line: "{{ proxy_address }} {{ domain_name }}"` | The replacement (or newly-added) line content. | The new mapping: this domain now points at the proxy's address. |
+| `backup: true` | Saves a timestamped copy of the entire file before any modification, independent of Ansible's own change tracking. | Keeps a safety-net copy every time this file actually changes. |
+| `- name: Place the Root CA in the system trust anchors` | Copies the Root CA's *public* certificate (never its private key) into the RHEL-family trust-anchors directory. | Delivers the "trusted certificate authority" file to where the system looks for one. |
+| `notify: Update CA trust` | Queues the handler that rebuilds the compiled trust bundle, but only if this copy actually changed the file. | If the trusted certificate actually changed, remember to rebuild the trust list. |
+| `- name: Rebuild the trust bundle now ...` / `ansible.builtin.meta: flush_handlers` | Forces the `Update CA trust` handler to run immediately if queued, rather than waiting for the end of the play — necessary because the `verify` role runs immediately afterward in the same play and needs the rebuilt trust bundle to already be current. | Rebuild the trust list right now, since the very next step needs it done already. |
+
+#### `roles/client_trust/handlers/main.yml`
 
 ```yaml
+# roles/client_trust/handlers/main.yml
 - name: Update CA trust
-  ansible.builtin.command: update-ca-trust extract
-  changed_when: true
+  ansible.builtin.command: update-ca-trust extract   # regenerates /etc/pki/ca-trust/extracted/*
+  changed_when: true                                 # only ever runs when the anchor changed
 ```
-Operating systems in the RHEL family do not re-scan the trust-anchor directory on every certificate check, for performance reasons; instead, they maintain a pre-compiled bundle of trusted certificates, rebuilt only on request. `update-ca-trust extract` performs that rebuild. `changed_when: true` is a manual override: because this is a plain `command` task, Ansible cannot inspect its effect automatically, so this line explicitly states "treat this as a change whenever it runs" — which is accurate here, since it only ever runs as a handler triggered by an actual certificate change.
+
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `ansible.builtin.command: update-ca-trust extract` | Runs the RHEL-family command that rebuilds the compiled trust bundles under `/etc/pki/ca-trust/extracted/` from everything currently in the source anchors directories. | Regenerates the operating system's actual "list of who I trust," using whatever certificates are currently in the trusted folder. |
+| `changed_when: true` | Manually asserts this task always counts as a change, since a plain `command` task can't be automatically inspected the way a dedicated module can — accurate here because this handler only ever runs as a result of an actual certificate change. | Always count this as "something changed," since it's true whenever this step even runs. |
+
+### 6.13 Role `verify` — end-to-end proof from the client
+
+#### `roles/verify/defaults/main.yml`
 
 ```yaml
-- name: Resolve {{ domain_name }} through the system resolver (/etc/hosts first)
-  ansible.builtin.command: getent hosts {{ domain_name }}
-  failed_when: verify_dns.stdout.split()[0] | default('') != proxy_address
+# roles/verify/defaults/main.yml — nothing to override; tests read group_vars.
+verify_url: "https://{{ domain_name }}/"
 ```
-`getent hosts` queries the operating system's name resolution mechanism using the exact same code path every application on the system uses — a stronger test than manually reading `/etc/hosts`, since it confirms the resolution actually functions end-to-end, not merely that the file contains the expected text. `.stdout.split()[0]` extracts the first whitespace-separated token from the command's output (the resolved IP address) for comparison against the expected value.
+
+| Line | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `verify_url: "https://{{ domain_name }}/"` | Builds the full HTTPS URL the final verification test requests. | The web address the last, full check actually visits. |
+
+#### `roles/verify/tasks/main.yml`
 
 ```yaml
-- name: HTTPS with FULL certificate validation returns the managed page
-  ansible.builtin.uri:
-    url: "{{ verify_url }}"
-    validate_certs: true
-    return_content: true
-  failed_when: >-
-    webpage_marker not in verify_https.content or
-    verify_https.x_backend_server | default('') != groups['webserver'][0]
+# roles/verify/tasks/main.yml — Milestone 5/6: end-to-end proof from the client.
+# Every task is read-only (changed_when: false or uri), so this role never reports "changed".
+
+- name: End-to-end verification from the client
+  when: not ansible_check_mode   # tests read LIVE state; skip them in --check
+  tags: [verify]                 # run alone with: ansible-playbook site.yml --tags verify
+  block:
+    - name: Resolve {{ domain_name }} through the system resolver (/etc/hosts first)
+      ansible.builtin.command: getent hosts {{ domain_name }}
+      register: verify_dns
+      changed_when: false
+      failed_when: verify_dns.stdout.split()[0] | default('') != proxy_address
+
+    - name: Confirm the Root CA is in the system trust store
+      ansible.builtin.shell: trust list --filter=ca-anchors | grep -F "{{ root_ca_common_name }}"
+      register: verify_trust
+      changed_when: false
+
+    - name: HTTP is redirected to HTTPS
+      ansible.builtin.uri:
+        url: "http://{{ domain_name }}/"
+        follow_redirects: none
+        status_code: 301
+      register: verify_redirect
+      failed_when: >-
+        verify_redirect.status != 301 or
+        not verify_redirect.location.startswith('https://' ~ domain_name)
+
+    - name: HTTPS with FULL certificate validation returns the managed page
+      ansible.builtin.uri:
+        url: "{{ verify_url }}"
+        validate_certs: true      # fails unless the chain + SAN check out against the system trust store
+        return_content: true
+      register: verify_https
+      failed_when: >-
+        webpage_marker not in verify_https.content or
+        verify_https.x_backend_server | default('') != groups['webserver'][0]
+
+    - name: End-to-end summary
+      ansible.builtin.debug:
+        msg:
+          - "DNS      : {{ domain_name }} -> {{ verify_dns.stdout.split()[0] }} (proxy)"
+          - "Trust    : {{ root_ca_common_name }} present in ca-anchors"
+          - "Redirect : http -> {{ verify_redirect.location }} ({{ verify_redirect.status }})"
+          - "HTTPS    : {{ verify_https.status }}, Server={{ verify_https.server }}, X-Backend-Server={{ verify_https.x_backend_server }}"
+          - "Path     : client -> NGINX {{ proxy_address }}:{{ proxy_https_port }} -> Apache {{ backend_address }}:{{ backend_port }}"
 ```
-`validate_certs: true` instructs the `uri` module to perform full certificate validation exactly as a browser would: verifying the signature chain up to a trusted anchor, and checking the requested hostname against the certificate's SAN field. This is the first point in the whole project where that full validation is actually exercised — [[Milestone 3 — Proxy Gateway Role|Milestone 3's]] own test of NGINX deliberately used `validate_certs: false`, since a client's trust configuration doesn't exist yet at that point in the deployment sequence.
+
+| Line(s) | Technical explanation | In plain terms |
+| --- | --- | --- |
+| `- name: End-to-end verification from the client` / `when: not ansible_check_mode` / `tags: [verify]` / `block:` | Groups every task in this role under one shared skip condition and tag. | The whole "final proof" checklist, skipped during a rehearsal run. |
+| `- name: Resolve {{ domain_name }} through the system resolver ...` | Runs `getent hosts`, which queries the operating system's actual name-resolution mechanism (the same code path every real application uses), rather than reading `/etc/hosts` directly as a text file. | Ask the computer, the normal way, "where would this domain actually take me?" |
+| `failed_when: verify_dns.stdout.split()[0] \| default('') != proxy_address` | Splits the command's text output on whitespace, takes the first token (the resolved address), and compares it to the expected proxy address; `default('')` prevents an error if the output was empty. | Fail unless the resolved address is exactly the proxy's. |
+| `- name: Confirm the Root CA is in the system trust store` | `ansible.builtin.shell` (used here instead of `command`, since this line uses a pipe, which `command` cannot interpret) runs `trust list`, filtered to CA anchors, and searches for the Root CA's name with `grep -F` (a literal, non-regex search). | Ask the operating system's actual trust list, "is this certificate authority really on it?" |
+| `- name: HTTP is redirected to HTTPS` | Requests the plain-HTTP URL with `follow_redirects: none`, capturing the redirect response itself rather than following it. | Check that the insecure door really does redirect, without actually following the redirect. |
+| `status_code: 301` | Declares that only an HTTP 301 response counts as success for this request — any other status (including a different kind of redirect, like 302) fails the task. | Requires the redirect to specifically be "permanent," not some other kind. |
+| `failed_when: verify_redirect.status != 301 or not verify_redirect.location.startswith('https://' ~ domain_name)` | A compound check: the status must be exactly 301, *and* the `Location` header must begin with `https://` followed by the domain name (`~` is Jinja2's string-concatenation operator). | Fail unless it's really a 301, *and* it really points to the secure version of this exact domain. |
+| `- name: HTTPS with FULL certificate validation returns the managed page` | Requests the HTTPS URL with `validate_certs: true` — full certificate chain and hostname validation, exactly as a real browser performs it. | The real, no-shortcuts test: does a fully-validated secure connection actually work? |
+| `failed_when: webpage_marker not in verify_https.content or verify_https.x_backend_server \| default('') != groups['webserver'][0]` | Fails unless the marker text is present *and* the backend header names the correct host. | Fail unless the content is right *and* it demonstrably came from the correct backend machine. |
+| `- name: End-to-end summary` / `msg: [...]` | Prints a five-line summary, each line restating one already-proven fact from the tasks above using their `register`-ed results. | A readable recap of everything just proven, in one place. |
 
 ---
 
-## 11. Milestone 6 — Why Re-Running the Same Command Proves Anything
+## 7. Why Re-Running the Same Command Proves Anything
 
 Section 2 established that Ansible tasks describe a desired *state*, and each module checks current state before acting. A direct, testable consequence follows: **running the identical playbook a second time against an already-correctly-configured system should report zero changes**, because every task's precondition check will find the desired state already satisfied.
 
@@ -714,13 +1266,13 @@ This is not a hopeful claim — it is a falsifiable prediction that this project
 
 **A stronger test extends this idea to detect and correct manual interference.** If a person modifies a managed file by hand, outside of Ansible, the file's actual state now differs from what the playbook declares. Re-running the exact same playbook will find *only that one discrepancy* (since every other file/service/setting is still correct) and correct *only* that one thing — it does not need to be told what changed; it re-derives that by re-checking everything. This was tested directly in this project: a configuration value was changed by hand on `proxy-vm1`, which caused the site to fail; re-running the identical playbook command found and corrected exactly that one file, restoring service, without touching any other component.
 
-**A separate mechanism prevents a different category of failure: a mistake introduced through the playbook itself**, rather than around it. The `validate:` argument used on the Apache and NGINX configuration tasks (§7, §9) tests a candidate configuration file *before* it replaces the live one. If validation fails — for instance, from a typo in a variable that produces an invalid setting — the task fails and the live, working configuration file is left completely untouched. This project verified that behavior directly by deliberately supplying an invalid setting and confirming, via a checksum comparison, that the live configuration file was byte-for-byte identical before and after the failed attempt, and that the site remained available throughout.
+**A separate mechanism prevents a different category of failure: a mistake introduced through the playbook itself**, rather than around it. The `validate:` argument used on the Apache and NGINX configuration tasks (§6.10, §6.11) tests a candidate configuration file *before* it replaces the live one. If validation fails — for instance, from a typo in a variable that produces an invalid setting — the task fails and the live, working configuration file is left completely untouched. This project verified that behavior directly by deliberately supplying an invalid setting and confirming, via a checksum comparison, that the live configuration file was byte-for-byte identical before and after the failed attempt, and that the site remained available throughout.
 
 Full command output for both of these tests is recorded in [[Milestone 6 — Repeatability Check]].
 
 ---
 
-## 12. Full Execution, Start to Finish, in Order
+## 8. Full Execution, Start to Finish, in Order
 
 Running `ansible-playbook site.yml` executes, in this fixed order:
 
@@ -730,11 +1282,11 @@ Running `ansible-playbook site.yml` executes, in this fixed order:
 4. **Proxy deployment** — on `proxy-vm1`: NGINX is installed, the certificate and key from step 2 are delivered to it, a complete NGINX configuration is generated and validated before being applied, the necessary firewall ports are opened, and the SELinux policy exception required for proxying is granted.
 5. **Client configuration and verification** — on `control-vm3`, acting as a client: `labapp.com` is mapped to the proxy's address in `/etc/hosts`, the Root CA is installed as a trust anchor and the system trust bundle is rebuilt, and then a sequence of independent checks is executed: name resolution, presence of the CA in the trust store, the HTTP-to-HTTPS redirect, and a fully-validated HTTPS request confirming the response actually originated from `web-vm2` by way of `proxy-vm1`.
 
-Each of these steps only performs work where the current state differs from the declared desired state, which is the property demonstrated and tested in §11.
+Each of these steps only performs work where the current state differs from the declared desired state, which is the property demonstrated and tested in §7.
 
 ---
 
-## 13. Glossary
+## 9. Glossary
 
 | Term | Definition |
 | --- | --- |
